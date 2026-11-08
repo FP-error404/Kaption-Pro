@@ -556,4 +556,5 @@ class FFmpegService:
         res_info = self.probe_streams(str(out))
         return ExportResult(str(out), out.stat().st_size, res_info.duration if res_info else duration,
                             res_info.height if res_info else 0,
-                            [] if res_info else ["ffprobe tidak tersedia: hanya ukuran file dan struktur MP4 yang diperiksa (stream/durasi tidak)"])
+                            [] if res_info else ["ffprobe tidak tersedia: hanya ukuran file dan struktur MP4 "
+                                                 "yang diperiksa (stream/durasi tidak)"])

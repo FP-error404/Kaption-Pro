@@ -200,8 +200,8 @@ class ArgosBackend(TranslatorBackend):
     def translate(self, text: str, src: str, tgt: str) -> str:
         code = {"zh-CN": "zh"}.get(src, src)
         langs = _argos_translate.get_installed_languages()
-        frm = next((l for l in langs if l.code == code), None)
-        to = next((l for l in langs if l.code == tgt), None)
+        frm = next((lang for lang in langs if lang.code == code), None)
+        to = next((lang for lang in langs if lang.code == tgt), None)
         if frm is None or to is None or frm.get_translation(to) is None:
             raise RuntimeError(f"Paket bahasa Argos {code}→{tgt} belum terpasang. Pasang lewat argostranslate.")
         return _argos_translate.translate(text, code, tgt)
