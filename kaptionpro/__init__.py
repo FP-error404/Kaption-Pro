@@ -96,6 +96,13 @@ Perubahan v1.8 (audit keamanan data v1.7)
  * File partial FFmpeg bernama unik per proses (pid + UUID): export bersamaan ke tujuan yang sama
    tidak saling menghapus; export kedua ditolak dengan pesan jelas; partial basi milik proses mati dibersihkan.
 
+(Perubahan v1.9.9 - Perbaikan setelah run CI pertama:
+ * tests/test_00_repo_structure.py: deteksi berkas/folder yang belum ter-upload dengan pesan jelas (penyebab
+   'No module named kaptionpro.ui' pada run pertama).
+ * Lint: 13 temuan ruff dibereskan (E741 x2, E501, F401 x2; E402 main.py diabaikan lewat pyproject).
+ * Tes GUI: handler log ditutup + folder sementara dibersihkan dengan retry (WinError 32 di Windows).
+ * Kode aplikasi lain TIDAK berubah.)
+
 (Perubahan v1.9.8 - Tes GUI otomatis:
  * tests/test_gui_smoke.py: aplikasi ASLI dijalankan di CI (Linux xvfb + Windows) dengan data dialihkan ke folder
    sementara; screenshot + log diunggah sebagai artefak. Job CI 'gui-smoke' + workflow_dispatch. Lihat TESTING.md.
@@ -140,4 +147,4 @@ Perubahan v1.8 (audit keamanan data v1.7)
 output, backup berversi, lock atomik, VLC volume/frame-step, editor cari/filter/undo-redo/bulk.)
 """
 
-__version__ = "1.9.8"
+__version__ = "1.9.9"
