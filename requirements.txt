@@ -1,0 +1,11 @@
+# Wajib untuk menjalankan aplikasi (GUI)
+customtkinter>=5.2,<6
+
+# Opsional (fitur menyesuaikan otomatis bila tidak terpasang)
+faster-whisper        # transkripsi AI (suara -> teks)
+deep-translator       # penerjemah online
+python-vlc            # preview video nyata (butuh VLC terpasang)
+argostranslate        # penerjemah offline
+
+# Catatan: FFmpeg + ffprobe harus ada di PATH untuk Export MP4.
+# Tes (tests/) TIDAK membutuhkan paket di atas: python -m unittest discover -s tests -v

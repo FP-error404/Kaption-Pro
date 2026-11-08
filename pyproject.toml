@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kaptionpro"
+dynamic = ["version"]
+description = "Editor subtitle desktop (Whisper + FFmpeg) dengan tema Luxury Dark-Gold"
+requires-python = ">=3.10"
+# Sengaja dibatasi di bawah mayor berikutnya; naikkan setelah diuji.
+dependencies = [
+    "customtkinter>=5.2,<6",
+]
+
+[project.optional-dependencies]
+ai = ["faster-whisper", "deep-translator"]   # transkripsi + penerjemah ONLINE
+media = ["python-vlc"]                       # preview video (butuh VLC desktop)
+offline = ["argostranslate"]                 # penerjemah offline
+dev = ["ruff"]
+
+[project.scripts]
+kaptionpro = "kaptionpro.main:main"
+
+# Struktur flat: tanpa ini setuptools menemukan 'kaptionpro' DAN 'tests' dan menolak membangun paket.
+[tool.setuptools.packages.find]
+include = ["kaptionpro*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "kaptionpro.__version__" }
+
+[tool.ruff]
+line-length = 130
+target-version = "py310"
+
+[tool.ruff.lint]
+# Mulai konservatif (kesalahan nyata saja); tambah aturan (I, UP, B) bertahap setelah kode bersih.
+select = ["E", "F", "W"]
