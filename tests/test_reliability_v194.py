@@ -563,7 +563,6 @@ class CacheCloseRaceTests(unittest.TestCase):
         for call in (lambda: self.cache.get_many(["a"]), lambda: self.cache.put_many({"b": "2"}),
                      self.cache.count, self.cache.clear):
             with self.subTest(call=call):
-                from kaptionpro.core.storage import TranslationCache
                 self.setUp()
                 self.cache._lock = self._closing_lock()
                 call()                                           # tidak boleh AttributeError ('NoneType'.execute)

@@ -33,7 +33,7 @@ if str(ROOT) not in sys.path:
 REQUIRE_GUI = os.environ.get("KAPTION_REQUIRE_GUI") == "1"
 ARTIFACTS = Path(os.environ.get("KAPTION_GUI_ARTIFACTS") or (ROOT / "gui-artifacts"))
 
-_TMP: tempfile.TemporaryDirectory | None = None
+_TMP_DIR: str | None = None          # str (bukan TemporaryDirectory): finalizer-nya melempar PermissionError di Windows
 _SAVED_ENV: dict[str, str | None] = {}
 
 
@@ -52,8 +52,30 @@ def _probe_gui() -> str | None:
     return None
 
 
+def _release_log_files() -> None:
+    """Tutup SEMUA handler berkas log milik aplikasi. Di Windows berkas yang masih terbuka tidak bisa dihapus
+    (WinError 32), sehingga folder sementara gagal dibersihkan."""
+    import logging
+    seen = [logging.getLogger("KaptionPro"), logging.getLogger()]
+    for logger in seen:
+        for handler in list(logger.handlers):
+            if isinstance(handler, logging.FileHandler):
+                try:
+                    handler.close()
+                finally:
+                    logger.removeHandler(handler)
+
+
+def _rmtree_retry(path: str, attempts: int = 5) -> None:
+    for i in range(attempts):
+        shutil.rmtree(path, ignore_errors=True)
+        if not os.path.exists(path):
+            return
+        time.sleep(0.2 * (i + 1))                              # antivirus/indeks Windows kadang menahan berkas sebentar
+
+
 def setUpModule() -> None:
-    global _TMP
+    global _TMP_DIR
     problem = _probe_gui()
     if problem is None and "kaptionpro.config" in sys.modules:
         problem = ("modul kaptionpro sudah diimpor oleh tes lain; jalankan terpisah: "
@@ -62,10 +84,10 @@ def setUpModule() -> None:
         if REQUIRE_GUI:
             raise AssertionError(f"GUI wajib tersedia (KAPTION_REQUIRE_GUI=1) tetapi: {problem}")
         raise unittest.SkipTest(problem)
-    _TMP = tempfile.TemporaryDirectory(prefix="kp-gui-home-")
+    _TMP_DIR = tempfile.mkdtemp(prefix="kp-gui-home-")
     for key in ("HOME", "USERPROFILE"):                       # Path.home() -> APP_DIR (~/.kaptionpro)
         _SAVED_ENV[key] = os.environ.get(key)
-        os.environ[key] = _TMP.name
+        os.environ[key] = _TMP_DIR
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
 
 
@@ -75,12 +97,13 @@ def tearDownModule() -> None:
             os.environ.pop(key, None)
         else:
             os.environ[key] = old
-    if _TMP is not None:
+    if _TMP_DIR is not None:
+        _release_log_files()
         try:                                                   # log aplikasi ikut jadi artefak (bahan diagnosis)
-            shutil.copy(Path(_TMP.name) / ".kaptionpro" / "kaptionpro.log", ARTIFACTS / "kaptionpro.log")
+            shutil.copy(Path(_TMP_DIR) / ".kaptionpro" / "kaptionpro.log", ARTIFACTS / "kaptionpro.log")
         except OSError:
             pass
-        shutil.rmtree(_TMP.name, ignore_errors=True)          # Windows bisa menahan file log: abaikan
+        _rmtree_retry(_TMP_DIR)
 
 
 class GuiSmokeTests(unittest.TestCase):
@@ -120,7 +143,7 @@ class GuiSmokeTests(unittest.TestCase):
         from kaptionpro import config
         from kaptionpro.main import KaptionProApp
         cls.config = config
-        if not str(config.APP_DIR).startswith(_TMP.name):
+        if not str(config.APP_DIR).startswith(_TMP_DIR):
             raise AssertionError(f"APP_DIR tidak dialihkan ke folder sementara: {config.APP_DIR}")
         cls.app = KaptionProApp()
         cls.app.report_callback_exception = lambda exc, val, tb: cls.errors.append(f"{exc.__name__}: {val}")
@@ -200,7 +223,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(app.current_screen, "welcome")
         self.assertIn("KaptionPro", app.title())
         self.assertEqual(set(app.screens), {"welcome", "workspace"})
-        self.assertTrue(str(self.config.APP_DIR).startswith(_TMP.name), "data pengguna asli TIDAK boleh tersentuh")
+        self.assertTrue(str(self.config.APP_DIR).startswith(_TMP_DIR), "data pengguna asli TIDAK boleh tersentuh")
         self.assertEqual(len(app.screens["welcome"]._cards), 0)
         self.assertEqual(self.bad_dialogs(), [])
         self.shot("01_welcome")
@@ -283,7 +306,7 @@ class GuiSmokeTests(unittest.TestCase):
 
     def _prepare_generate(self, ws, translator: str):
         """Siapkan kondisi agar _generate_subtitles sampai ke pemeriksaan privasi, tanpa Whisper/jaringan asli."""
-        video = Path(_TMP.name) / "dummy.mp4"
+        video = Path(_TMP_DIR) / "dummy.mp4"
         video.write_bytes(b"x" * 2048)
         ws.project.video_path = str(video)
         ws.project.translator = translator
