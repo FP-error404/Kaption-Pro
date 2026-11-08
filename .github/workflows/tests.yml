@@ -1,0 +1,93 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  core-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Jalankan tes
+        run: python -m unittest discover -s tests -v
+
+  lint:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Ruff
+        run: |
+          pip install ruff
+          ruff check .
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel + sdist
+        run: |
+          pip install build twine
+          python -m build
+          twine check dist/*
+      - name: Install wheel di venv bersih lalu import inti
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install dist/*.whl
+          /tmp/clean/bin/python -c "import kaptionpro, kaptionpro.core.storage, kaptionpro.services.ai_service, kaptionpro.services.ffmpeg_service; print(kaptionpro.__version__)"
+
+  gui-smoke:
+    name: gui-smoke (${{ matrix.os }}, py${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.10" }
+          - { os: ubuntu-latest, python: "3.12" }
+          - { os: windows-latest, python: "3.12" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      KAPTION_REQUIRE_GUI: "1"
+      KAPTION_GUI_ARTIFACTS: gui-artifacts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Paket sistem (Linux) - layar virtual + Tk
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb tk
+      - name: Pasang CustomTkinter + Pillow
+        run: pip install "customtkinter>=5.2,<6" pillow
+      - name: Info Tk
+        run: python -c "import tkinter, customtkinter; print('Tk', tkinter.TkVersion, '| customtkinter', customtkinter.__version__)"
+      - name: Tes GUI (Linux, xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" python -m unittest tests.test_gui_smoke -v
+      - name: Tes GUI (Windows)
+        if: runner.os == 'Windows'
+        run: python -m unittest tests.test_gui_smoke -v
+      - name: Unggah screenshot + log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-artifacts-${{ matrix.os }}-py${{ matrix.python }}
+          path: gui-artifacts/
+          if-no-files-found: warn
