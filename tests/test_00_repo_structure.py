@@ -23,6 +23,7 @@ REQUIRED = [
     "kaptionpro/services/ffmpeg_service.py", "kaptionpro/services/vlc_player.py",
     "kaptionpro/ui/__init__.py", "kaptionpro/ui/components.py", "kaptionpro/ui/dialogs.py", "kaptionpro/ui/editor.py",
     "kaptionpro/ui/welcome.py", "kaptionpro/ui/workspace.py",
+    "tests/winsafe.py",
     "pyproject.toml", "requirements.txt", ".github/workflows/tests.yml",
 ]
 

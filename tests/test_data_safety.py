@@ -14,7 +14,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import unittest
@@ -26,6 +25,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from kaptionpro.core.utils import CancelledError, InterProcessLock, _atomic_write   # noqa: E402
+
+try:
+    from tests.winsafe import SafeTemporaryDirectory
+except ImportError:          # dijalankan langsung dari folder tests/
+    from winsafe import SafeTemporaryDirectory
 
 IS_WIN = sys.platform.startswith("win")
 CHILD_ENV = {**os.environ, "PYTHONPATH": os.pathsep.join([str(ROOT), os.environ.get("PYTHONPATH", "")])}
@@ -61,7 +65,7 @@ def kill(p: subprocess.Popen) -> None:
 # ============================================================ lock antar-proses
 class InterProcessLockTests(unittest.TestCase):
     def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = SafeTemporaryDirectory()
         self.dir = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
 
@@ -179,11 +183,12 @@ class ProjectStoreLockTests(unittest.TestCase):
     def setUp(self) -> None:
         from kaptionpro.core.storage import ProjectStore
         from kaptionpro.models import Project
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = SafeTemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.store = ProjectStore(Path(self._tmp.name))
         self.project = Project(name="demo")
         self.addCleanup(lambda: ProjectStore._held_locks.clear())
+        self.addCleanup(self.store.close)             # lepas lock project + penanda sesi sebelum folder dihapus (Windows)
 
     def test_lock_is_reentrant_in_same_process_and_unlock_releases(self):
         self.assertTrue(self.store.lock(self.project))
@@ -296,10 +301,11 @@ class StorageSafetyTests(unittest.TestCase):
     def setUp(self) -> None:
         from kaptionpro.core.storage import ProjectStore
         from kaptionpro.models import Project
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = SafeTemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
         self.store = ProjectStore(self.root)
+        self.addCleanup(self.store.close)
         self.project = Project(name="demo")
         self.store.add(self.project)
 
@@ -445,6 +451,7 @@ class StorageSafetyTests(unittest.TestCase):
     def test_second_instance_does_not_overwrite_or_report_live_first_instance(self):
         from kaptionpro.core.storage import ProjectStore
         other = ProjectStore(self.root)
+        self.addCleanup(other.close)
         self.assertFalse(self.store.session_begin())
         self.assertFalse(other.session_begin())                  # instance pertama masih hidup: bukan crash
         self.store.session_end()                                 # instance pertama tutup normal
@@ -452,11 +459,14 @@ class StorageSafetyTests(unittest.TestCase):
                          if InterProcessLock.read_owner_pid(p) is not None]
         self.assertEqual(len(crashed_files), 1, "penanda instance kedua harus tetap utuh")
         other.session_end()
-        self.assertFalse(ProjectStore(self.root).session_begin())
+        last = ProjectStore(self.root)
+        self.addCleanup(last.close)
+        self.assertFalse(last.session_begin())
 
     def test_crash_of_one_instance_is_detected_while_another_runs(self):
         from kaptionpro.core.storage import ProjectStore
         survivor = ProjectStore(self.root)
+        self.addCleanup(survivor.close)
         self.assertFalse(survivor.session_begin())
         self._crashing_instance()
         self.assertTrue(self.store.session_begin())
@@ -494,7 +504,7 @@ class FFmpegSafetyTests(unittest.TestCase):
         from kaptionpro.services import ffmpeg_service as fs
         self.fs = fs
         self.svc = fs.FFmpegService()
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = SafeTemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.dir = Path(self._tmp.name)
         self.src = self.dir / "src.mp4"
@@ -787,14 +797,17 @@ class FFmpegSafetyTests(unittest.TestCase):
 class TranslationCacheTests(unittest.TestCase):
     def test_corrupt_database_disables_cache_without_crashing(self):
         from kaptionpro.core.storage import TranslationCache
-        with tempfile.TemporaryDirectory() as d:
+        with SafeTemporaryDirectory() as d:
             path = Path(d) / "cache.db"
             path.write_bytes(b"ini bukan database sqlite " * 50)
             cache = TranslationCache(path)
-            self.assertEqual(cache.count(), 0)
-            self.assertEqual(cache.get_many(["a"]), {})
-            cache.put_many({"a": "b"})                           # tidak boleh melempar exception
-            cache.clear()
+            try:
+                self.assertEqual(cache.count(), 0)
+                self.assertEqual(cache.get_many(["a"]), {})
+                cache.put_many({"a": "b"})                       # tidak boleh melempar exception
+                cache.clear()
+            finally:
+                cache.close()                                    # Windows: database terbuka tidak bisa dihapus
 
 
 # ============================================================ core tanpa GUI
@@ -818,11 +831,12 @@ class NoGuiTests(unittest.TestCase):
 class SessionMarkerTests(unittest.TestCase):
     def setUp(self) -> None:
         from kaptionpro.core.storage import ProjectStore
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = SafeTemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
         self.ProjectStore = ProjectStore
         self.store = ProjectStore(self.root)
+        self.addCleanup(self.store.close)
 
     def test_markers_are_never_unlinked_manually_when_removal_is_not_allowed(self):
         """Simulasi kebijakan Windows: tak ada unlink pada penanda sesi setelah lock dilepas."""
@@ -834,11 +848,13 @@ class SessionMarkerTests(unittest.TestCase):
                 mock.patch.object(Path, "unlink", lambda self_, *a, **k: (removed.append(str(self_)),
                                                                           real_path_unlink(self_, *a, **k))[1]):
             other = self.ProjectStore(self.root)
+            self.addCleanup(other.close)
             self.assertFalse(self.store.session_begin())
             self.assertFalse(other.session_begin())
             self.store.session_end()
             other.session_end()
             third = self.ProjectStore(self.root)
+            self.addCleanup(third.close)
             self.assertFalse(third.session_begin())
             third.session_end()
         self.assertEqual([r for r in removed if r.endswith(".session")], [])
@@ -857,7 +873,9 @@ class SessionMarkerTests(unittest.TestCase):
         (d / "2-crash.session").write_text("424242\n2026-01-01T00:00:00\n", encoding="utf-8")   # pemilik tak menutup
         self.assertTrue(self.store.session_begin())
         self.store.session_end()
-        self.assertFalse(self.ProjectStore(self.root).session_begin())                            # dikonsumsi sekali
+        again = self.ProjectStore(self.root)
+        self.addCleanup(again.close)
+        self.assertFalse(again.session_begin())                                                   # dikonsumsi sekali
 
     def test_cleanup_removes_only_old_clean_markers(self):
         d = self.store.sessions_dir
@@ -899,6 +917,7 @@ class SessionMarkerTests(unittest.TestCase):
         self.assertEqual([p.returncode for p in procs], [0] * 6, [o[1][-300:] for o in outs])
         self.assertEqual([o[0].strip() for o in outs], ["0"] * 6, "tidak boleh ada crash palsu")
         checker = self.ProjectStore(self.root)
+        self.addCleanup(checker.close)
         self.assertFalse(checker.session_begin())
         checker.session_end()
         for m in self.store.sessions_dir.glob("*.session"):
@@ -931,7 +950,7 @@ class ProjectIdTests(unittest.TestCase):
         entries = [good] + [{**good, "id": bad, "name": f"jahat-{i}"} for i, bad in enumerate(bad_ids)]
         no_id = {k: v for k, v in good.items() if k != "id"}
         no_id["name"] = "tanpa-id"
-        with tempfile.TemporaryDirectory() as d:
+        with SafeTemporaryDirectory() as d:
             root = Path(d)
             (root / "recent_projects.json").write_text(json.dumps(entries + [no_id]), encoding="utf-8")
             store = ProjectStore(root)
@@ -947,7 +966,7 @@ class ProjectIdTests(unittest.TestCase):
     def test_mutated_invalid_id_never_reaches_the_filesystem(self):
         from kaptionpro.core.storage import ProjectStore
         from kaptionpro.models import Project
-        with tempfile.TemporaryDirectory() as d:
+        with SafeTemporaryDirectory() as d:
             base = Path(d)
             victim = base / "victim.json"
             victim.write_text("JANGAN DIHAPUS", encoding="utf-8")
@@ -975,7 +994,7 @@ class ConcurrentDeleteTests(unittest.TestCase):
     def test_two_or_more_processes_deleting_same_project(self):
         from kaptionpro.core.storage import ProjectStore
         from kaptionpro.models import Project
-        with tempfile.TemporaryDirectory() as d:
+        with SafeTemporaryDirectory() as d:
             root, go = Path(d) / "app", Path(d) / "go"
             store = ProjectStore(root)
             pr = Project(name="rebutan")
@@ -1015,23 +1034,26 @@ class TranslationCacheLockedTests(unittest.TestCase):
     def test_database_locked_by_another_connection_degrades_gracefully(self):
         import sqlite3
         from kaptionpro.core.storage import TranslationCache
-        with tempfile.TemporaryDirectory() as d:
+        with SafeTemporaryDirectory() as d:
             path = Path(d) / "cache.db"
             with mock.patch.object(TranslationCache, "BUSY_TIMEOUT", 0.2):
                 cache = TranslationCache(path)
-                cache.put_many({"a": "b"})
-                other = sqlite3.connect(str(path), isolation_level=None)
                 try:
-                    other.execute("BEGIN EXCLUSIVE")                    # proses lain memegang database
-                    started = time.monotonic()
-                    cache.put_many({"c": "d"})                          # tidak boleh melempar / menggantung
-                    self.assertEqual(cache.get_many(["a"]), {})
-                    self.assertLess(time.monotonic() - started, 5.0)
+                    cache.put_many({"a": "b"})
+                    other = sqlite3.connect(str(path), isolation_level=None)
+                    try:
+                        other.execute("BEGIN EXCLUSIVE")                # proses lain memegang database
+                        started = time.monotonic()
+                        cache.put_many({"c": "d"})                      # tidak boleh melempar / menggantung
+                        self.assertEqual(cache.get_many(["a"]), {})
+                        self.assertLess(time.monotonic() - started, 5.0)
+                    finally:
+                        other.execute("ROLLBACK")
+                        other.close()
+                    cache.put_many({"c": "d"})
+                    self.assertEqual(cache.get_many(["a", "c"]), {"a": "b", "c": "d"})
                 finally:
-                    other.execute("ROLLBACK")
-                    other.close()
-                cache.put_many({"c": "d"})
-                self.assertEqual(cache.get_many(["a", "c"]), {"a": "b", "c": "d"})
+                    cache.close()                                       # Windows: database terbuka tidak bisa dihapus
 
 
 if __name__ == "__main__":

@@ -15,7 +15,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import unittest
@@ -28,6 +27,11 @@ if str(ROOT) not in sys.path:
 
 from kaptionpro.core.utils import (CancelledError, InterProcessLock, WorkerRegistry,   # noqa: E402
                                    interprocess_critical_section)
+
+try:
+    from tests.winsafe import SafeTemporaryDirectory
+except ImportError:          # dijalankan langsung dari folder tests/
+    from winsafe import SafeTemporaryDirectory
 
 IS_WIN = sys.platform.startswith("win")
 CHILD_ENV = {**os.environ, "PYTHONPATH": os.pathsep.join([str(ROOT), os.environ.get("PYTHONPATH", "")])}
@@ -107,10 +111,11 @@ class FFmpegStopTests(unittest.TestCase):
 class SessionCleanupRaceTests(unittest.TestCase):
     def setUp(self) -> None:
         from kaptionpro.core.storage import ProjectStore
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = SafeTemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
         self.store = ProjectStore(self.root)
+        self.addCleanup(self.store.close)
         self.d = self.store.sessions_dir
         self.d.mkdir(parents=True, exist_ok=True)
 
@@ -237,7 +242,7 @@ class RecentListSyncTests(unittest.TestCase):
         from kaptionpro.core.storage import ProjectStore, SettingsStore
         from kaptionpro.models import Project
         self.ProjectStore, self.SettingsStore, self.Project = ProjectStore, SettingsStore, Project
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = SafeTemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.root = Path(self._tmp.name)
 
@@ -412,7 +417,7 @@ class TranslationTimeoutTests(unittest.TestCase):
     def setUp(self) -> None:
         from kaptionpro.services import ai_service
         self.ai = ai_service
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = SafeTemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.svc = ai_service.AiService(Path(self._tmp.name) / "cache.sqlite")
         self.addCleanup(self.svc.close)
@@ -537,9 +542,10 @@ class TranslationTimeoutTests(unittest.TestCase):
 class CacheCloseRaceTests(unittest.TestCase):
     def setUp(self) -> None:
         from kaptionpro.core.storage import TranslationCache
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = SafeTemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.cache = TranslationCache(Path(self._tmp.name) / "c.sqlite")
+        self.addCleanup(self.cache.close)             # LIFO: tertutup sebelum folder dihapus (tiap setUp() punya cache sendiri)
         self.cache.put_many({"a": "1"})
 
     def _closing_lock(self):
@@ -550,7 +556,8 @@ class CacheCloseRaceTests(unittest.TestCase):
             def __enter__(self_inner):
                 real.acquire()
                 conn, cache._conn = cache._conn, None
-                conn.close()
+                if conn is not None:                   # close() pada cleanup juga lewat lock ini: koneksi bisa sudah tiada
+                    conn.close()
                 return self_inner
 
             def __exit__(self_inner, *exc):
@@ -637,7 +644,7 @@ class Mp4StructureTests(unittest.TestCase):
         from kaptionpro.services import ffmpeg_service as fs
         from tests.test_data_safety import FFmpegSafetyTests
         self.fs, self.mp4_bytes = fs, FFmpegSafetyTests.mp4_bytes
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = SafeTemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.dir = Path(self._tmp.name)
 
@@ -691,9 +698,15 @@ class PrivacyAndRetentionTests(unittest.TestCase):
         from kaptionpro.core.storage import TranslationCache
         from kaptionpro.services import ai_service
         self.ai, self.TranslationCache = ai_service, TranslationCache
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = SafeTemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.path = Path(self._tmp.name) / "c.sqlite"
+
+    def _cache(self):
+        """Cache yang DITUTUP eksplisit sebelum folder dihapus (Windows menolak menghapus database yang terbuka)."""
+        cache = self.TranslationCache(self.path)
+        self.addCleanup(cache.close)
+        return cache
 
     def test_online_backends_are_flagged_and_offline_is_not(self):
         self.assertTrue(self.ai.GoogleBackend.online)
@@ -729,7 +742,7 @@ class PrivacyAndRetentionTests(unittest.TestCase):
         self.assertIn("karakter", joined)                          # masih ada petunjuk diagnostik (panjang teks)
 
     def test_prune_removes_entries_older_than_max_age(self):
-        c = self.TranslationCache(self.path)
+        c = self._cache()
         c.put_many({"baru": "1", "lama": "2"})
         with c._lock:
             c._conn.execute("UPDATE tr SET ts = ? WHERE k = 'lama'", (time.time() - 400 * 86400,))
@@ -738,7 +751,7 @@ class PrivacyAndRetentionTests(unittest.TestCase):
         self.assertEqual(c.get_many(["baru", "lama"]), {"baru": "1"})
 
     def test_prune_enforces_entry_cap_by_dropping_oldest(self):
-        c = self.TranslationCache(self.path)
+        c = self._cache()
         c.put_many({f"k{i}": str(i) for i in range(10)})
         with c._lock:
             for i in range(10):
@@ -748,7 +761,7 @@ class PrivacyAndRetentionTests(unittest.TestCase):
         self.assertEqual(sorted(c.get_many([f"k{i}" for i in range(10)])), ["k6", "k7", "k8", "k9"])
 
     def test_prune_keeps_everything_within_limits_and_has_timestamp_index(self):
-        c = self.TranslationCache(self.path)
+        c = self._cache()
         c.put_many({"a": "1", "b": "2"})
         self.assertEqual(c.prune(), 0)
         self.assertEqual(c.count(), 2)
@@ -757,7 +770,7 @@ class PrivacyAndRetentionTests(unittest.TestCase):
         self.assertIn("idx_tr_ts", names)
 
     def test_prune_after_close_is_safe_and_is_noop(self):
-        c = self.TranslationCache(self.path)
+        c = self._cache()
         c.close()
         self.assertEqual(c.prune(), 0)
 

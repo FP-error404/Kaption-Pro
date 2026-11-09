@@ -9,11 +9,15 @@ from __future__ import annotations
 import queue
 import re
 import sys
-import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
+
+try:
+    from tests.winsafe import SafeTemporaryDirectory
+except ImportError:          # dijalankan langsung dari folder tests/
+    from winsafe import SafeTemporaryDirectory
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -235,7 +239,7 @@ class PrivacyConsentTests(unittest.TestCase):
     def test_consent_roundtrips_through_settings_store(self):
         from kaptionpro.core.privacy import ACK_KEY, is_acknowledged, with_acknowledged
         from kaptionpro.core.settings_store import SettingsStore
-        with tempfile.TemporaryDirectory() as d:
+        with SafeTemporaryDirectory() as d:
             st = SettingsStore(Path(d))
             st.set(ACK_KEY, with_acknowledged(st.get(ACK_KEY, {}), "google"))
             again = SettingsStore(Path(d))
@@ -260,7 +264,7 @@ class PrivacyConsentTests(unittest.TestCase):
 class CacheLastUsedTests(unittest.TestCase):
     def setUp(self) -> None:
         from kaptionpro.core.translation_cache import TranslationCache
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = SafeTemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.path = Path(self._tmp.name) / "c.sqlite"
         self.cache = TranslationCache(self.path)
