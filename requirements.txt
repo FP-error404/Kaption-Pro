@@ -1,11 +1,7 @@
-# Wajib untuk menjalankan aplikasi (GUI)
+# Minimal untuk menjalankan aplikasi (GUI): pip install -r requirements.txt
 customtkinter>=5.2,<6
 
-# Opsional (fitur menyesuaikan otomatis bila tidak terpasang)
-faster-whisper        # transkripsi AI (suara -> teks)
-deep-translator       # penerjemah online
-python-vlc            # preview video nyata (butuh VLC terpasang)
-argostranslate        # penerjemah offline
-
-# Catatan: FFmpeg + ffprobe harus ada di PATH untuk Export MP4.
+# Fitur opsional (transkripsi AI, penerjemah, preview video nyata) ada di requirements-full.txt
+# atau lewat extras: pip install -e ".[ai]" / ".[media]" / ".[offline]"
+# FFmpeg + ffprobe harus ada di PATH untuk Export MP4.
 # Tes (tests/) TIDAK membutuhkan paket di atas: python -m unittest discover -s tests -v

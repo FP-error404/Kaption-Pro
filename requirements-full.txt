@@ -1,0 +1,7 @@
+# Semua fitur (berat: faster-whisper menarik ctranslate2 dan lain-lain): pip install -r requirements-full.txt
+-r requirements.txt
+
+faster-whisper        # transkripsi AI (suara -> teks)
+deep-translator       # penerjemah online
+python-vlc            # preview video nyata (butuh VLC desktop terpasang)
+argostranslate        # penerjemah offline

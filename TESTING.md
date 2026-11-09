@@ -33,6 +33,9 @@ tetap perlu mata manusia. Tes GUI memastikan alur dan logika tidak rusak, bukan 
 | `ModuleNotFoundError: No module named 'kaptionpro.ui'` | folder `kaptionpro/ui` tidak ada di repo | upload folder `ui` (6 berkas `.py`) ke `kaptionpro/ui/` |
 | tab Actions kosong | `.github/workflows/tests.yml` tidak ada | buat lewat GitHub: Add file -> Create new file -> ketik `.github/workflows/tests.yml` |
 | `PermissionError: [WinError 32]` di job Windows | berkas masih terbuka saat folder sementara dihapus (Windows menolak; Linux tidak) | sejak v1.9.10 kebocoran serupa gagal di **Linux** dengan pesan `handle berkas BOCOR: <nama berkas>`; tutup resource-nya (`close()`/`unlock()`/`session_end()`) |
+| Folder `~/.kaptionpro/deleting/` berisi file `.tomb` | penghapusan project terputus (crash / daftar terkunci) | normal: dituntaskan otomatis saat KaptionPro dibuka; bila menetap, cek log baris `Pemulihan hapus ... belum tuntas` (berkas/folder backup terkunci) |
+| job `lint` merah di pull request | Ruff wajib sejak v1.9.12 | jalankan `pip install ruff && ruff check .` lokal dan perbaiki temuan |
+| Fitur AI/VLC nonaktif padahal paket sudah dipasang | paket gagal dimuat (bukan 'belum terpasang') | buka `~/.kaptionpro/kaptionpro.log`, cari baris `nonaktif: paket ... gagal dimuat` |
 | `AssertionError: 'landscape' != 'portrait'` di `test_09` (Windows) | runner CI tidak menerapkan ukuran jendela yang diminta | sejak v1.9.11 tes menunggu ukuran berubah dan memaksa mode portrait bila OS menolak; cek baris `[test_09 ...]` di log untuk ukuran nyata |
 | job `lint` merah | Ruff menemukan gaya kode yang menyimpang | informasional; temuan muncul sebagai anotasi di halaman run |
 
