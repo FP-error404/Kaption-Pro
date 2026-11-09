@@ -96,6 +96,14 @@ Perubahan v1.8 (audit keamanan data v1.7)
  * File partial FFmpeg bernama unik per proses (pid + UUID): export bersamaan ke tujuan yang sama
    tidak saling menghapus; export kedua ditolak dengan pesan jelas; partial basi milik proses mati dibersihkan.
 
+(Perubahan v1.9.10 - Kebocoran handle berkas (WinError 32 di CI Windows):
+ * Bug nyata: database cache yang RUSAK membuat cache "dimatikan" tetapi koneksinya dibiarkan terbuka -> berkas rusak itu
+   tidak bisa dihapus/diganti di Windows selama aplikasi berjalan. Kini koneksi ditutup.
+ * InterProcessLock.__del__ menutup fd bila objek dibuang tanpa release(); ProjectStore.close() melepas semua lock project
+   di bawah foldernya + penanda sesi.
+ * Tes: SafeTemporaryDirectory (tests/winsafe.py) -- di Linux GAGAL dengan daftar berkas bila ada handle bocor, di Windows
+   mencoba ulang lalu toleran. 10 tes pelaku kini menutup resource secara eksplisit (store.close(), cache.close()).)
+
 (Perubahan v1.9.9 - Perbaikan setelah run CI pertama:
  * tests/test_00_repo_structure.py: deteksi berkas/folder yang belum ter-upload dengan pesan jelas (penyebab
    'No module named kaptionpro.ui' pada run pertama).
@@ -147,4 +155,4 @@ Perubahan v1.8 (audit keamanan data v1.7)
 output, backup berversi, lock atomik, VLC volume/frame-step, editor cari/filter/undo-redo/bulk.)
 """
 
-__version__ = "1.9.9"
+__version__ = "1.9.10"
