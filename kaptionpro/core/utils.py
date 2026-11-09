@@ -290,6 +290,20 @@ class InterProcessLock:
         self.remove_on_release = remove_on_release
         self._fd: int | None = None
 
+    def __del__(self) -> None:
+        """Jaring pengaman: deskriptor berkas mentah (os.open) TIDAK ikut tertutup saat objek dibuang, sehingga lock yang
+        lupa di-release() menahan berkasnya (di Windows: WinError 32 saat folder dihapus). Hanya MENUTUP fd (melepas kunci
+        OS); tidak menghapus berkas. Tidak boleh melempar apa pun (dipanggil GC / saat interpreter keluar)."""
+        try:
+            fd, self._fd = self._fd, None
+            if fd is not None:
+                try:
+                    _os_unlock(fd)
+                finally:
+                    os.close(fd)
+        except Exception:  # noqa: BLE001
+            pass
+
     @property
     def held(self) -> bool:
         return self._fd is not None

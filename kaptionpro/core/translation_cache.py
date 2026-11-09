@@ -24,6 +24,7 @@ class TranslationCache:
         self.path = path
         self._lock = threading.Lock()
         self._conn: sqlite3.Connection | None = None
+        conn: sqlite3.Connection | None = None
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             conn = sqlite3.connect(str(path), check_same_thread=False, timeout=self.BUSY_TIMEOUT)
@@ -33,6 +34,13 @@ class TranslationCache:
             self._conn = conn
         except (sqlite3.Error, OSError) as e:
             log.warning("Translation cache dimatikan: %s", e)
+            if conn is not None and self._conn is None:
+                # Database rusak: koneksi sudah terbuka tetapi cache dimatikan. TUTUP -- kalau tidak, berkas rusak itu tetap
+                # terbuka (di Windows pengguna tidak bisa menghapus/menggantinya selama aplikasi berjalan).
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
 
     def prune(self, max_age_days: float | None = None, max_entries: int | None = None) -> int:
         """

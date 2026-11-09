@@ -600,6 +600,21 @@ class ProjectStore:
         except OSError as e:
             log.warning("Unlock gagal: %s", e)
 
+    def close(self) -> None:
+        """Lepas SEMUA yang dipegang proses ini di bawah folder data store ini: lock project (registri lock bersifat
+        per-proses/kelas, jadi dikenali lewat lokasinya) dan penanda sesi instance ini. Aman dipanggil berulang.
+        Dipakai tes dan alat bantu agar folder data bisa dihapus (Windows menolak menghapus berkas yang masih terbuka)."""
+        prefix = _norm_path(str(self.root)).rstrip(os.sep) + os.sep
+        with self._held_guard:
+            mine = [k for k in self._held_locks if k.startswith(prefix)]
+            locks = [self._held_locks.pop(k) for k in mine]
+        for lk in locks:
+            try:
+                lk.release()
+            except OSError as e:
+                log.warning("Close: lepas lock gagal: %s", e)
+        self.session_end()
+
     def is_locked_by_other(self, project: Project) -> bool:
         """Informasi saja (berdasarkan PID tercatat). Penentu sebenarnya adalah hasil lock()."""
         try:
