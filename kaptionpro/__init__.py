@@ -96,6 +96,12 @@ Perubahan v1.8 (audit keamanan data v1.7)
  * File partial FFmpeg bernama unik per proses (pid + UUID): export bersamaan ke tujuan yang sama
    tidak saling menghapus; export kedua ditolak dengan pesan jelas; partial basi milik proses mati dibersihkan.
 
+(Perubahan v1.9.11 - Tes GUI toleran terhadap runner CI:
+ * test_09 (tata letak 1366x768 & portrait) gagal di Windows CI dengan 'landscape' != 'portrait' karena runner tidak
+   menerapkan ukuran jendela yang diminta. Tes kini menunggu sampai ukuran benar-benar berubah (_resize), memeriksa
+   konsistensi mode dengan ukuran nyata, dan hanya menuntut 'portrait' ketat bila jendela memang berhasil diubah.
+   Bila tidak, cabang portrait tetap diuji dengan memaksa mode-nya. Tidak ada perubahan perilaku aplikasi.)
+
 (Perubahan v1.9.10 - Kebocoran handle berkas (WinError 32 di CI Windows):
  * Bug nyata: database cache yang RUSAK membuat cache "dimatikan" tetapi koneksinya dibiarkan terbuka -> berkas rusak itu
    tidak bisa dihapus/diganti di Windows selama aplikasi berjalan. Kini koneksi ditutup.
@@ -155,4 +161,4 @@ Perubahan v1.8 (audit keamanan data v1.7)
 output, backup berversi, lock atomik, VLC volume/frame-step, editor cari/filter/undo-redo/bulk.)
 """
 
-__version__ = "1.9.10"
+__version__ = "1.9.11"
