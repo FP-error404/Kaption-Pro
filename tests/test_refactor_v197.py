@@ -360,11 +360,11 @@ class StructureAndMetadataTests(unittest.TestCase):
             self.assertNotRegex(src, r"(?m)^\s*(import|from)\s+(customtkinter|tkinter)", name)
 
     @staticmethod
-    def _requirements() -> dict[str, str]:
+    def _requirements(name: str = "requirements.txt") -> dict[str, str]:
         out = {}
-        for raw in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
+        for raw in (ROOT / name).read_text(encoding="utf-8").splitlines():
             line = raw.split("#", 1)[0].strip()
-            if line:
+            if line and not line.startswith("-"):             # "-r requirements.txt" bukan paket
                 m = re.match(r"([A-Za-z0-9_.\-]+)\s*(.*)$", line)
                 out[m.group(1).lower()] = m.group(2).strip()
         return out
@@ -377,9 +377,15 @@ class StructureAndMetadataTests(unittest.TestCase):
                 for d in py["project"]["dependencies"]}
         self.assertEqual(core, {"customtkinter": req["customtkinter"]},
                          "batas versi wajib sama di pyproject.toml dan requirements.txt")
+        # v1.9.12: requirements.txt HANYA inti; paket opsional ada di requirements-full.txt (sama dengan extras).
+        self.assertEqual(set(req), {"customtkinter"}, "requirements.txt tidak boleh memuat paket opsional")
         extras = {re.match(r"[A-Za-z0-9_.\-]+", d).group(0).lower()
                   for k, v in py["project"]["optional-dependencies"].items() if k != "dev" for d in v}
-        self.assertEqual(extras, set(req) - {"customtkinter"})
+        self.assertEqual(set(self._requirements("requirements-full.txt")), extras)
+
+    def test_requirements_full_includes_the_core_file(self):
+        text = (ROOT / "requirements-full.txt").read_text(encoding="utf-8")
+        self.assertRegex(text, r"(?m)^-r\s+requirements\.txt\s*$")
 
     @unittest.skipIf(tomllib is None, "tomllib butuh Python 3.11+")
     def test_version_is_single_sourced_and_tests_are_not_packaged(self):

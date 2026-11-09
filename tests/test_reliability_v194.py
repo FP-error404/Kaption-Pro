@@ -328,7 +328,12 @@ class RecentListSyncTests(unittest.TestCase):
             self.assertIn("daftar belum bisa diperbarui", a.last_delete_error or "")
         finally:
             blocker.release()
-        self.assertEqual(self._names(), ["x"], "daftar di disk tidak boleh berubah tanpa lock")
+        raw = [x["name"] for x in json.loads((self.root / "recent_projects.json").read_text(encoding="utf-8"))]
+        self.assertEqual(raw, ["x"], "daftar di disk tidak boleh berubah tanpa lock")
+        # v1.9.12: datanya sudah terhapus, jadi entri yatim itu disembunyikan (penanda hapus) dan dibersihkan
+        # begitu daftar bisa ditulis lagi, tanpa menunggu user menghapus ulang.
+        self.assertEqual(self._names(), [], "entri yatim harus tersembunyi")
+        self.assertEqual(self._names(), [])
 
     def test_load_without_lock_is_readonly_and_does_not_repair(self):
         """_load() tanpa lock: tidak boleh karantina/pemulihan/penulisan (hanya baca)."""

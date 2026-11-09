@@ -23,8 +23,9 @@ REQUIRED = [
     "kaptionpro/services/ffmpeg_service.py", "kaptionpro/services/vlc_player.py",
     "kaptionpro/ui/__init__.py", "kaptionpro/ui/components.py", "kaptionpro/ui/dialogs.py", "kaptionpro/ui/editor.py",
     "kaptionpro/ui/welcome.py", "kaptionpro/ui/workspace.py",
-    "tests/winsafe.py",
-    "pyproject.toml", "requirements.txt", ".github/workflows/tests.yml",
+    "tests/winsafe.py", "tests/test_hardening_v1912.py",
+    "tests/test_storage_recovery_v1913.py",
+    "pyproject.toml", "requirements.txt", "requirements-full.txt", ".github/workflows/tests.yml",
 ]
 
 

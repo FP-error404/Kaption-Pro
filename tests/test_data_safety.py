@@ -46,6 +46,11 @@ time.sleep(60)
 """
 
 
+def utils_atomic_write():
+    from kaptionpro.core import storage
+    return storage._atomic_write
+
+
 def spawn_holder(path: Path, go: Path | None = None) -> subprocess.Popen:
     path.parent.mkdir(parents=True, exist_ok=True)
     args = [sys.executable, "-c", HOLDER, str(path)] + ([str(go)] if go else [])
@@ -288,6 +293,84 @@ class ProjectStoreLockTests(unittest.TestCase):
         self.store.remove_from_recent(self.project)
         self.assertNotIn(self.project.id, [x.id for x in self.store.projects])
         self.assertTrue(self.store.subs_path(self.project).exists())
+
+    # ---------- v1.9.12: entri yatim (data terhapus, pembaruan daftar gagal) ----------
+    def _delete_with_failing_list_update(self):
+        from kaptionpro.core.storage import ProjectStore
+        self.store.add(self.project)
+        self.store.save_segments(self.project, _segments(2))
+        with mock.patch.object(ProjectStore, "_update_list", return_value=False):
+            self.assertFalse(self.store.delete_project(self.project))
+
+    def test_orphan_entry_is_hidden_and_cleaned_after_restart(self):
+        from kaptionpro.core.storage import ProjectStore
+        self._delete_with_failing_list_update()
+        self.assertFalse(self.store.subs_path(self.project).exists())
+        self.assertIn("disembunyikan", self.store.last_delete_error or "")
+        self.assertTrue(self.store._tomb_path(self.project.id).exists())
+        self.assertIn(self.project.id, [x["id"] for x in json.loads(self.store.list_path.read_text("utf-8"))])
+        reopened = ProjectStore(self.store.root)                  # aplikasi dibuka lagi
+        self.addCleanup(reopened.close)
+        self.assertNotIn(self.project.id, [x.id for x in reopened.projects])      # tidak tampil di UI
+        self.assertNotIn(self.project.id, [x["id"] for x in json.loads(reopened.list_path.read_text("utf-8"))])
+        self.assertFalse(reopened._tomb_path(self.project.id).exists())           # penanda ikut dibersihkan
+
+    def test_orphan_tombstone_is_pruned_on_next_successful_list_write(self):
+        from kaptionpro.models import Project
+        self._delete_with_failing_list_update()
+        self.assertTrue(self.store._tomb_path(self.project.id).exists())
+        self.assertTrue(self.store.add(Project(name="lain")))
+        self.assertNotIn(self.project.id, [x["id"] for x in json.loads(self.store.list_path.read_text("utf-8"))])
+        self.assertFalse(self.store._tomb_path(self.project.id).exists())
+
+    def test_failed_delete_removes_tombstone_and_keeps_project_visible(self):
+        self.store.add(self.project)
+        self.store.save_segments(self.project, _segments(2))
+        real_unlink = Path.unlink
+
+        def flaky(self_path, *a, **k):
+            if self_path.name == self.project.id + ".json" and self_path.parent.name == "projects":
+                raise PermissionError(errno.EACCES, "terkunci")
+            return real_unlink(self_path, *a, **k)
+
+        with mock.patch.object(Path, "unlink", flaky):
+            self.assertFalse(self.store.delete_project(self.project))
+        self.assertFalse(self.store._tomb_path(self.project.id).exists())
+        self.assertIn(self.project.id, [x.id for x in self.store.projects])
+        self.assertIn(self.project.id, [x["id"] for x in json.loads(self.store.list_path.read_text("utf-8"))])
+
+    def test_failed_delete_restores_entry_if_another_instance_rewrote_the_list(self):
+        self.store.add(self.project)
+        self.store.save_segments(self.project, _segments(2))
+        real_unlink = Path.unlink
+
+        def flaky(self_path, *a, **k):
+            if self_path.name == self.project.id + ".json" and self_path.parent.name == "projects":
+                self.store.list_path.write_text("[]", encoding="utf-8")       # instance lain menulis daftar kosong
+                raise PermissionError(errno.EACCES, "terkunci")
+            return real_unlink(self_path, *a, **k)
+
+        with mock.patch.object(Path, "unlink", flaky):
+            self.assertFalse(self.store.delete_project(self.project))
+        self.assertIn(self.project.id, [x["id"] for x in json.loads(self.store.list_path.read_text("utf-8"))])
+
+    def test_delete_is_aborted_untouched_when_tombstone_cannot_be_written(self):
+        self.store.add(self.project)
+        self.store.save_segments(self.project, _segments(2))
+        real_write = utils_atomic_write()
+        with mock.patch("kaptionpro.core.storage._atomic_write",
+                        side_effect=lambda path, text, *a, **k: (_ for _ in ()).throw(OSError(errno.EACCES, "ditolak"))
+                        if str(path).endswith(".tomb") else real_write(path, text, *a, **k)):
+            self.assertFalse(self.store.delete_project(self.project))
+        self.assertIn("tidak ada yang dihapus", self.store.last_delete_error or "")
+        self.assertTrue(self.store.subs_path(self.project).exists())
+        self.assertIn(self.project.id, [x.id for x in self.store.projects])
+
+    def test_successful_delete_leaves_no_tombstone(self):
+        self.store.add(self.project)
+        self.store.save_segments(self.project, _segments(2))
+        self.assertTrue(self.store.delete_project(self.project))
+        self.assertEqual(self.store._tombstoned_ids(), set())
         self.assertFalse(hasattr(self.store, "remove"), "API lama yang menghapus semuanya tidak boleh tersisa")
 
 
