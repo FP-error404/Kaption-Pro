@@ -13,6 +13,7 @@ import uuid
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable
 
 from ..config import APP_DIR, SESSION_ID, log
@@ -78,6 +79,7 @@ class ProjectStore:
         self.notes: list[str] = []          # catatan pemulihan untuk ditampilkan ke user
         self._rejected: list = []           # entri daftar project dengan ID tidak valid (dikarantina saat load)
         self.projects: list[Project] = self._load()
+        self.recover_pending_deletes()           # tuntaskan penghapusan yang terputus oleh crash sesi sebelumnya
 
     # ---------- util file ----------
     @staticmethod
@@ -132,7 +134,42 @@ class ProjectStore:
                 projects.append(Project(**kw))
             except (TypeError, ValueError) as e:
                 log.warning("Item project dilewati: %s", e)
+        tombs = self._tombstoned_ids()
+        if tombs:                                            # data sudah dihapus, entri daftar belum sempat dicabut
+            kept = [p for p in projects if p.id not in tombs]
+            if len(kept) != len(projects):
+                log.info("%d entri project yatim (data sudah dihapus) disembunyikan", len(projects) - len(kept))
+                projects, migrated = kept, True              # migrated=True -> daftar ditulis ulang tanpa entri itu
         return projects, migrated
+
+    # ---------- penanda hapus (tombstone): hapus project tuntas walau pembaruan daftar gagal ----------
+    def _tomb_path(self, project_id: str) -> Path:
+        return self.root / "deleting" / f"{project_id}.tomb"
+
+    def _tombstoned_ids(self) -> set[str]:
+        try:
+            names = os.listdir(self.root / "deleting")
+        except OSError:
+            return set()
+        return {n[:-5] for n in names if n.endswith(".tomb") and is_valid_project_id(n[:-5])}
+
+    def _drop_tombstone(self, project_id: str) -> None:
+        try:
+            self._tomb_path(project_id).unlink(missing_ok=True)
+        except OSError as e:
+            log.warning("Penanda hapus %s belum bisa dibersihkan: %s", project_id, e)
+
+    def _project_data_exists(self, project_id: str) -> bool:
+        ref = SimpleNamespace(id=project_id)                  # path hanya butuh .id (divalidasi ulang di _id)
+        paths = (self.subs_path(ref), self.snapshot_path(ref), self.preview_ass_path(ref), self.backup_dir(ref))
+        return any(p.exists() for p in paths)
+
+    def _prune_tombstones(self, listed: list[Project]) -> None:
+        """Hapus penanda yang sudah tuntas: entri tak lagi di daftar DAN datanya sudah hilang."""
+        ids = {p.id for p in listed}
+        for pid in self._tombstoned_ids() - ids:
+            if not self._project_data_exists(pid):
+                self._drop_tombstone(pid)
 
     def _list_lock_path(self) -> Path:
         return self.root / "recent_projects.json.lock"
@@ -214,11 +251,12 @@ class ProjectStore:
             if self.list_path.exists() and self._read_json(self.list_path) is not _CORRUPT:
                 shutil.copy2(self.list_path, self.bak_path)       # salinan terakhir yang baik
             _atomic_write(self.list_path, json.dumps([asdict(p) for p in projects], indent=2, ensure_ascii=False))
-            return True
         except OSError as e:
             log.error("Gagal menyimpan recent projects: %s", e)
             self.last_save_error = str(e)
             return False
+        self._prune_tombstones(projects)
+        return True
 
     def _update_list(self, mutator: Callable[[list[Project]], list[Project]]) -> bool:
         """
@@ -262,61 +300,118 @@ class ProjectStore:
         """Hanya mencabut project dari DAFTAR. Subtitle, snapshot, preview, dan backup TIDAK disentuh."""
         return self._update_list(lambda current: [p for p in current if p.id != project.id])
 
+    def _acquire_exclusive(self, project) -> tuple[InterProcessLock | None, str | None]:
+        """Lock EKSKLUSIF project, tanpa menunggu. (lock, None) bila berhasil; (None, alasan) bila ditolak.
+        `project` cukup memiliki atribut .id. Dipakai delete_project() dan pemulihan penghapusan yang terputus."""
+        try:
+            path = self._lock_path(project)               # ID tidak valid -> ValueError: tidak ada yang disentuh
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except ValueError as e:
+            return None, str(e)
+        except OSError as e:
+            return None, f"folder lock tidak bisa dibuat: {e}"
+        with self._held_guard:
+            if _norm_path(str(path)) in self._held_locks:
+                return None, "Project sedang dibuka di jendela ini. Tutup project-nya dulu."
+            lk = InterProcessLock(path, remove_on_release=True)
+            try:
+                got = lk.acquire()
+            except OSError as e:
+                return None, f"lock project tidak bisa diambil: {e}"
+            if not got:
+                return None, "Project sedang dibuka di instance KaptionPro lain."
+        return lk, None
+
+    def _purge_project_data(self, project) -> list[str]:
+        """Hapus semua data project (subtitle, snapshot, preview, folder backup). IDEMPOTEN: yang sudah tidak ada
+        dianggap beres, jadi aman dijalankan ulang setelah crash di tengah jalan. Return daftar kegagalan (kosong = bersih)."""
+        failures: list[str] = []
+        for target in (self.subs_path(project), self.snapshot_path(project), self.preview_ass_path(project)):
+            try:
+                target.unlink(missing_ok=True)
+            except OSError as e:
+                failures.append(f"{target.name}: {e}")
+        try:
+            shutil.rmtree(self.backup_dir(project))
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            failures.append(f"backup: {e}")
+        return failures
+
+    def _ensure_listed(self, project: Project) -> bool:
+        return self._update_list(lambda cur: cur if any(p.id == project.id for p in cur) else [project, *cur])
+
     def delete_project(self, project: Project) -> bool:
         """
         Hapus PERMANEN data project (subtitle, snapshot, preview, semua backup) lalu cabut dari daftar.
         Hanya dilakukan bila lock EKSKLUSIF berhasil diambil: bila project sedang dipakai instance lain (atau
         dibuka di proses ini) penghapusan DIBATALKAN dan tidak ada yang disentuh. Bila sebagian file gagal dihapus,
         project tetap ada di daftar agar bisa dicoba lagi. False -> lihat last_delete_error.
+
+        Transaksi: penanda hapus (tombstone) ditulis dulu = "penghapusan DIMULAI". Bila proses mati di tengah jalan,
+        recover_pending_deletes() (dipanggil saat store dibuka) menuntaskan sisanya; penanda baru dibuang setelah data
+        hilang DAN daftar bersih.
         """
         self.last_delete_error = None
-        try:
-            path = self._lock_path(project)               # ID tidak valid -> ValueError: tidak ada yang dihapus
-            path.parent.mkdir(parents=True, exist_ok=True)
-        except ValueError as e:
-            self.last_delete_error = str(e)
+        lk, err = self._acquire_exclusive(project)
+        if lk is None:
+            self.last_delete_error = err
             return False
-        except OSError as e:
-            self.last_delete_error = f"folder lock tidak bisa dibuat: {e}"
-            return False
-        with self._held_guard:
-            if _norm_path(str(path)) in self._held_locks:
-                self.last_delete_error = "Project sedang dibuka di jendela ini. Tutup project-nya dulu."
-                return False
-            lk = InterProcessLock(path, remove_on_release=True)
-            try:
-                got = lk.acquire()
-            except OSError as e:
-                self.last_delete_error = f"lock project tidak bisa diambil: {e}"
-                return False
-            if not got:
-                self.last_delete_error = "Project sedang dibuka di instance KaptionPro lain."
-                return False
         try:
-            failures: list[str] = []
-            for target in (self.subs_path(project), self.snapshot_path(project), self.preview_ass_path(project)):
-                try:
-                    target.unlink(missing_ok=True)
-                except OSError as e:
-                    failures.append(f"{target.name}: {e}")
-            try:
-                shutil.rmtree(self.backup_dir(project))
-            except FileNotFoundError:
-                pass
+            tomb = self._tomb_path(project.id)
+            try:                                              # PENANDA DULU: tanpa penanda tak ada yang dihapus
+                tomb.parent.mkdir(parents=True, exist_ok=True)
+                _atomic_write(tomb, json.dumps({"id": project.id, "at": datetime.now().isoformat(timespec="seconds")}))
             except OSError as e:
-                failures.append(f"backup: {e}")
+                self.last_delete_error = f"Penanda hapus tidak bisa ditulis, tidak ada yang dihapus: {e}"
+                return False
+            failures = self._purge_project_data(project)
             if failures:
+                # Tidak tuntas: pastikan project TERLIHAT di daftar dulu, baru penanda dibuang (urutan ini penting).
+                self._ensure_listed(project)
+                self._drop_tombstone(project.id)
                 self.last_delete_error = "Sebagian data gagal dihapus (project tetap di daftar):\n" + "\n".join(failures)
                 log.warning("delete_project gagal: %s", failures)
                 return False
             if not self._update_list(lambda current: [p for p in current if p.id != project.id]):
+                # Data sudah hilang; penanda tetap ada sehingga entri yatim disembunyikan dan dicabut otomatis
+                # pada penulisan daftar berikutnya (atau saat aplikasi dibuka lagi).
                 self.last_delete_error = ("Data project sudah dihapus, tetapi daftar belum bisa diperbarui "
                                           f"({self.last_save_error or 'lock daftar tidak tersedia'}).\n"
-                                          "Hapus dari daftar lagi sebentar lagi.")
+                                          "Entrinya sudah disembunyikan dan akan dibersihkan otomatis.")
                 return False
+            self._drop_tombstone(project.id)
             return True
         finally:
             lk.release()
+
+    def recover_pending_deletes(self) -> int:
+        """
+        Tuntaskan penghapusan yang terputus (crash / daftar gagal diperbarui). Untuk tiap penanda hapus: ambil lock
+        eksklusif project (dilewati bila dipakai instance lain), hapus sisa data secara idempoten, cabut dari daftar,
+        lalu buang penanda. Bila sisa data belum bisa dihapus, penanda dipertahankan (project tetap tersembunyi,
+        sesuai permintaan hapus dari user) dan dicoba lagi pada pembukaan berikutnya. Return jumlah yang tuntas.
+        """
+        done = 0
+        for pid in sorted(self._tombstoned_ids()):
+            ref = SimpleNamespace(id=pid)
+            lk, err = self._acquire_exclusive(ref)
+            if lk is None:
+                log.info("Pemulihan hapus %s ditunda: %s", pid, err)
+                continue
+            try:
+                failures = self._purge_project_data(ref)
+                if failures:
+                    log.warning("Pemulihan hapus %s belum tuntas (dicoba lagi nanti): %s", pid, failures)
+                    continue
+                if self._update_list(lambda cur, pid=pid: [p for p in cur if p.id != pid]):
+                    self._drop_tombstone(pid)
+                    done += 1
+                    log.info("Penghapusan project %s yang terputus telah dituntaskan", pid)
+            finally:
+                lk.release()
+        return done
 
     # ---------- path per project ----------
     @staticmethod
