@@ -96,6 +96,29 @@ Perubahan v1.8 (audit keamanan data v1.7)
  * File partial FFmpeg bernama unik per proses (pid + UUID): export bersamaan ke tujuan yang sama
    tidak saling menghapus; export kedua ditolak dengan pesan jelas; partial basi milik proses mati dibersihkan.
 
+(Perubahan v1.9.13 - Storage Reliability & Crash Recovery (hanya core/storage.py; UI tidak berubah):
+ * Penanda hapus (tombstone) kini berarti "penghapusan DIMULAI", bukan "selesai". Bila aplikasi mati di tengah
+   hapus project (mis. subtitle sudah terhapus tetapi folder backup belum), saat store dibuka
+   recover_pending_deletes() menuntaskan sisanya (idempoten), mencabut entri dari daftar, lalu membuang penanda.
+   Sebelumnya project hanya disembunyikan dan sisa data menjadi yatim di disk.
+ * Pemulihan mengambil lock eksklusif project dan DILEWATI bila project dipakai instance lain; bila sisa data
+   belum bisa dihapus, penanda dipertahankan dan dicoba lagi pada pembukaan berikutnya.
+ * Penghapusan yang tidak tuntas: project dipastikan tampil di daftar SEBELUM penanda dibuang.
+ * Refaktor internal: _acquire_exclusive() dan _purge_project_data() dipakai bersama oleh delete_project() dan
+   pemulihan. Tes baru: crash sungguhan (proses dimatikan mendadak di 3 titik), hapus vs simpan (satu proses dan
+   lintas proses), hapus project berbeda bersamaan, dan daftar terkunci setelah data terhapus.)
+
+(Perubahan v1.9.12 - Penguatan kecil, tanpa fitur baru:
+ * CI: job core-tests kini punya timeout 15 menit; lint (Ruff) menjadi WAJIB (tanpa continue-on-error).
+ * requirements.txt hanya berisi inti (customtkinter). Fitur opsional pindah ke requirements-full.txt (atau extras
+   di pyproject.toml), sehingga 'pip install -r requirements.txt' tidak lagi menarik paket AI yang berat.
+ * Impor dependensi opsional (whisper, penerjemah, VLC) kini mencatat ALASAN nonaktif di log: 'belum terpasang'
+   (info) dibedakan dari 'terpasang tetapi gagal dimuat' (peringatan, mis. libvlc tak ditemukan). Lihat
+   config.OPTIONAL_STATUS.
+ * Hapus project permanen: penanda hapus (folder 'deleting') ditulis SEBELUM data dihapus. Bila data sudah hilang
+   tetapi daftar gagal diperbarui, entri yatim langsung disembunyikan dan dicabut otomatis pada penulisan daftar
+   berikutnya / saat aplikasi dibuka lagi. Bila penghapusan tidak tuntas, project dijamin tetap tampil di daftar.)
+
 (Perubahan v1.9.11 - Tes GUI toleran terhadap runner CI:
  * test_09 (tata letak 1366x768 & portrait) gagal di Windows CI dengan 'landscape' != 'portrait' karena runner tidak
    menerapkan ukuran jendela yang diminta. Tes kini menunggu sampai ukuran benar-benar berubah (_resize), memeriksa
@@ -161,4 +184,4 @@ Perubahan v1.8 (audit keamanan data v1.7)
 output, backup berversi, lock atomik, VLC volume/frame-step, editor cari/filter/undo-redo/bulk.)
 """
 
-__version__ = "1.9.11"
+__version__ = "1.9.13"

@@ -64,32 +64,51 @@ def setup_logging() -> logging.Logger:
 
 log = setup_logging()
 
+# Fitur opsional yang TIDAK aktif beserta alasannya: "belum terpasang" | "gagal dimuat: <jenis error>".
+OPTIONAL_STATUS: dict[str, str] = {}
+
+
+def _optional_unavailable(package: str, feature: str, exc: BaseException) -> None:
+    """Catat KENAPA fitur opsional tidak aktif. 'Belum terpasang' (normal) dibedakan dari 'terpasang tetapi gagal
+    dimuat' (mis. libvlc tak ditemukan, DLL/dependensi rusak), supaya masalah instalasi tidak tersamar."""
+    if isinstance(exc, ModuleNotFoundError) and (exc.name or "").split(".")[0] == package:
+        OPTIONAL_STATUS[package] = "belum terpasang"
+        log.info("%s nonaktif: paket '%s' belum terpasang", feature, package)
+    else:
+        OPTIONAL_STATUS[package] = f"gagal dimuat: {type(exc).__name__}"
+        log.warning("%s nonaktif: paket '%s' ada tetapi gagal dimuat (%s: %s)", feature, package,
+                    type(exc).__name__, exc)
+
 
 try:
     from faster_whisper import WhisperModel as _FasterWhisperModel  # noqa
     HAS_FASTER_WHISPER = True
-except Exception:  # noqa: BLE001
+except Exception as exc:  # noqa: BLE001
+    _optional_unavailable("faster_whisper", "Transkripsi AI", exc)
     _FasterWhisperModel = None
     HAS_FASTER_WHISPER = False
 
 try:
     from deep_translator import GoogleTranslator as _GoogleTranslator  # noqa
     HAS_DEEP_TRANSLATOR = True
-except Exception:  # noqa: BLE001
+except Exception as exc:  # noqa: BLE001
+    _optional_unavailable("deep_translator", "Penerjemah online", exc)
     _GoogleTranslator = None
     HAS_DEEP_TRANSLATOR = False
 
 try:
     import argostranslate.translate as _argos_translate  # noqa
     HAS_ARGOS = True
-except Exception:  # noqa: BLE001
+except Exception as exc:  # noqa: BLE001
+    _optional_unavailable("argostranslate", "Penerjemah offline", exc)
     _argos_translate = None
     HAS_ARGOS = False
 
 try:
     import vlc as _vlc  # noqa
     HAS_VLC = True
-except Exception:  # noqa: BLE001
+except Exception as exc:  # noqa: BLE001
+    _optional_unavailable("vlc", "Preview video (VLC)", exc)
     _vlc = None
     HAS_VLC = False
 
