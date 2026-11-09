@@ -32,6 +32,7 @@ tetap perlu mata manusia. Tes GUI memastikan alur dan logika tidak rusak, bukan 
 | `berkas wajib TIDAK ADA di repo` (tes `test_00_repo_structure`) | folder/berkas belum ter-upload | upload ulang yang disebut di pesan, ke lokasi yang sama |
 | `ModuleNotFoundError: No module named 'kaptionpro.ui'` | folder `kaptionpro/ui` tidak ada di repo | upload folder `ui` (6 berkas `.py`) ke `kaptionpro/ui/` |
 | tab Actions kosong | `.github/workflows/tests.yml` tidak ada | buat lewat GitHub: Add file -> Create new file -> ketik `.github/workflows/tests.yml` |
+| `PermissionError: [WinError 32]` di job Windows | berkas masih terbuka saat folder sementara dihapus (Windows menolak; Linux tidak) | sejak v1.9.10 kebocoran serupa gagal di **Linux** dengan pesan `handle berkas BOCOR: <nama berkas>`; tutup resource-nya (`close()`/`unlock()`/`session_end()`) |
 | job `lint` merah | Ruff menemukan gaya kode yang menyimpang | informasional; temuan muncul sebagai anotasi di halaman run |
 
 Catatan: job `package` bisa hijau walau folder `ui` hilang, karena hanya mengimpor `core` dan `services`.
