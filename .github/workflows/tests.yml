@@ -7,6 +7,7 @@ on:
 
 jobs:
   core-tests:
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -22,8 +23,8 @@ jobs:
         run: python -m unittest discover -s tests -v
 
   lint:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
