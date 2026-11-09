@@ -385,12 +385,43 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertGreaterEqual(ticks_during_backlog[0], 5,
                                 "event loop tidak sempat berjalan di tengah antrean (UI tampak membeku)")
 
+    def _resize(self, width: int, height: int, timeout: float = 3.0) -> bool:
+        """Minta ukuran jendela lalu TUNGGU sampai window manager benar-benar menerapkannya.
+
+        True bila ukuran nyata mendekati yang diminta. Di runner CI (terutama Windows) permintaan ukuran bisa
+        diabaikan/ditunda/dijepit; pemanggil tidak boleh berasumsi ukuran sudah berubah hanya karena geometry() dipanggil.
+        """
+        app = self.app
+        try:
+            app.state("normal")                                # jangan sampai jendela sedang zoomed/maximized
+        except Exception:  # noqa: BLE001
+            pass
+        app.geometry(f"{width}x{height}+0+0")
+        app.update_idletasks()
+
+        def honored() -> bool:
+            return abs(app.winfo_width() - width) <= 40 and abs(app.winfo_height() - height) <= 40
+
+        ok = self.pump(until=honored, timeout=timeout)
+        self.pump(0.3)                                          # beri waktu debounce <Configure> (80 ms) bekerja
+        return ok
+
+    def _expected_mode(self, ws) -> str:
+        w, h = ws.winfo_width(), ws.winfo_height()
+        return "portrait" if (w < ws.PORTRAIT_BREAKPOINT or w < h) else "landscape"
+
     def test_09_layout_is_usable_at_1366x768_and_in_portrait(self):
         app, ws = self.app, self.ensure_workspace()
         try:
-            app.geometry("1366x768+0+0")
-            self.pump(0.6)
-            self.assertEqual(ws._mode, "landscape")
+            honored = self._resize(1366, 768)
+            ws._apply_layout()                                  # deterministik: tak menunggu event <Configure> dari OS
+            self.pump(0.2)
+            print(f"[test_09 landscape] diminta 1366x768, nyata {app.winfo_width()}x{app.winfo_height()}, "
+                  f"diterapkan={honored}, mode={ws._mode}")
+            self.assertEqual(ws._mode, self._expected_mode(ws),
+                             "mode layout tidak konsisten dengan ukuran workspace yang sebenarnya")
+            if honored:
+                self.assertEqual(ws._mode, "landscape")
             bottom_limit = app.winfo_rooty() + app.winfo_height() + 2
             for name in ("export_bar", "jobbar"):
                 widget = getattr(ws, name)
@@ -399,13 +430,27 @@ class GuiSmokeTests(unittest.TestCase):
                                      f"{name} meluap keluar jendela 1366x768")
             self.shot("09_workspace_1366x768")
 
-            app.geometry("700x900+0+0")
-            self.pump(0.6)
-            self.assertEqual(ws._mode, "portrait")
+            honored = self._resize(700, 900)
+            ws._apply_layout()
+            self.pump(0.2)
+            print(f"[test_09 portrait] diminta 700x900, nyata {app.winfo_width()}x{app.winfo_height()}, "
+                  f"diterapkan={honored}, mode={ws._mode}")
+            self.assertEqual(ws._mode, self._expected_mode(ws),
+                             "mode layout tidak konsisten dengan ukuran workspace yang sebenarnya")
+            if honored:
+                self.assertEqual(ws._mode, "portrait")
+            else:
+                # Runner CI tidak mengubah ukuran jendela (bukan bug aplikasi). Cek tata letak portrait tetap
+                # dijalankan dengan memaksa mode-nya, supaya cabang portrait tidak lolos tanpa diuji.
+                ws._set_mode("portrait")
+                self.pump(0.3)
+                self.assertEqual(ws._mode, "portrait")
             self.assertTrue(ws.export_bar.winfo_ismapped())
+            self.assertTrue(ws.jobbar.winfo_ismapped())
             self.shot("09_workspace_portrait_700x900")
         finally:
-            app.geometry("1366x768+0+0")
+            self._resize(1366, 768)
+            ws._apply_layout()
             self.pump(0.3)
 
     def test_10_back_home_lists_project_and_reopen_restores_subtitles(self):
