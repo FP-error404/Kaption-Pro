@@ -9,43 +9,39 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------------------------------------------
 # Tinggi panel preset (kolom kanan, mode landscape)
 # ---------------------------------------------------------------------------------------------------------------
+# Satuan di sini = tinggi PANEL SEBENARNYA di layar (px logis). Sejak v1.9.15.2 panel dibungkus wadah berukuran tetap
+# (WorkspaceScreen.side_box, grid_propagate(False)), jadi tinggi ini DIPATUHI persis. Sebelumnya `configure(height=)`
+# pada CTkScrollableFrame tidak berpengaruh di bawah ~210 px: scrollbar vertikal CustomTkinter meminta tinggi 200 px
+# (+ padding 2 x radius + border), sehingga panel "bandel" di 210 px. Buktinya dari log CI v1.9.15: dengan panel = 210,
+# elemen lain di Linux (768 - 210 - 394) dan di Windows (749 - 210 - 375) sama-sama 164 px.
 SIDE_H_MAX = 250             # tinggi panel preset pada jendela lega
-SIDE_H_MIN = 120             # tinggi NYAMAN panel preset (perkiraan awal tidak pernah di bawah ini)
-SIDE_H_FLOOR = 80            # batas mutlak: bila tabel subtitle masih kekurangan tempat, panel boleh menyusut sampai sini
-                             # (panel bisa di-scroll, sedangkan tabel subtitle adalah area kerja utama)
+SIDE_H_MIN = 120             # perkiraan awal tidak pernah di bawah ini
+SIDE_H_FLOOR = SIDE_H_MIN    # penyetelan akhir juga tidak pernah memaksa panel lebih kecil dari ini (isinya di-scroll)
 
 # Kolom kanan (landscape) ditumpuk dari atas ke bawah: top bar, panel preset, editor, tombol export, job bar.
-# Tinggi jendela harus cukup untuk SEMUANYA; sisa setelah semua elemen lain dihitung diberikan ke panel preset.
-#
-# Angka di bawah adalah PERKIRAAN AWAL. Penyetelan akhir dilakukan di aplikasi (WorkspaceScreen._rebalance_side) dengan
-# mengukur tinggi tabel subtitle yang sebenarnya, sehingga ketidaktepatan perkiraan tidak lagi membuat tabel terjepit.
+# Komponen di bawah = elemen LAIN (di luar panel preset dan editor).
 TOP_BAR_H = 48               # bar atas: tombol Home, nama project, status simpan, tombol-tombol kecil
 GRID_PADDING_H = 46          # jumlah pady antar-baris grid kolom kanan: 10 + 6 + 6 + 6 + 6 + 2 + 2 + 8 (pasti, dari kode)
 EXPORT_BAR_H = 42            # tombol Export Video / SRT / ASS
 JOB_BAR_H = 33               # job bar (label status, progress, Cancel)
-# Perkiraan di atas diukur dari screenshot CI v1.9.13 (1366x768). CTkScrollableFrame menambah padding vertikal sebesar
-# corner_radius di atas dan di bawah kanvasnya, jadi tinggi nyata panel preset = tinggi yang diminta + 2 x Theme.RADIUS.
-SCROLLABLE_EXTRA_H = 8
-# Pengukuran CI v1.9.15 (log test_11, panel preset diminta 165 dan 146 px): total elemen kolom kanan di luar editor dan
-# di luar tinggi diminta panel ternyata 209 px (Linux, jendela 768) dan 228 px (Windows, jendela 749), sedangkan
-# komponen di atas hanya menjelaskan 177 px (169 + 8). Selisih terbesar (51) dicatat di sini; penguraiannya
-# menunggu log test_11 berikutnya (mencetak `elemen lain` dan `extra` dengan widget yang benar).
-UNEXPLAINED_SLACK_H = 51
-
 OUTSIDE_H = TOP_BAR_H + GRID_PADDING_H + EXPORT_BAR_H + JOB_BAR_H                 # 169 (perkiraan komponen)
-RIGHT_COLUMN_FIXED_H = OUTSIDE_H + SCROLLABLE_EXTRA_H + UNEXPLAINED_SLACK_H       # 228 (konservatif: nilai terbesar CI)
+CI_OUTSIDE_H = 164           # hasil ukur CI v1.9.15 (Linux dan Windows sama): perkiraan di atas hanya 5 px lebih besar
+RIGHT_COLUMN_FIXED_H = OUTSIDE_H                                                  # konservatif: nilai yang lebih besar
 
 # Editor subtitle. Tinggi editor TANPA widget tabel = 298 px (CI: editor 394 - tabel 96 di Linux, 375 - 77 di Windows):
-# header, kolom cari, 2 baris toolbar, form, dan padding. Tabel (header + baris, Treeview rowheight=26) minimal 100 px
-# = header + >= 3 baris data yang terlihat.
+# header, kolom cari, 2 baris toolbar, form, dan padding. Sejak v1.9.15.2 toolbar diringkas menjadi 1 baris (hemat ~30 px);
+# angka 298 SENGAJA tidak dikurangi untuk perhitungan jaminan (konservatif), nilai nyata dicetak oleh test_11.
+# Tabel (header + baris, Treeview rowheight=26) minimal 90 px = header + >= 2-3 baris data yang terlihat.
 EDITOR_CHROME_H = 298
+EDITOR_TOOLBAR_SAVED_H = 30  # satu baris toolbar (tombol 26 + pady 2 x 2) yang dihemat v1.9.15.2
 ROW_H = 26
-TABLE_MIN_PX = 100
-EDITOR_MIN_H = EDITOR_CHROME_H + TABLE_MIN_PX                                      # 398
+TABLE_MIN_PX = 90
+EDITOR_MIN_H = EDITOR_CHROME_H + TABLE_MIN_PX                                      # 388
 
 # Tinggi jendela dikurangi CHROME_H = tinggi yang boleh dipakai panel preset (lalu dijepit SIDE_H_MIN..SIDE_H_MAX).
-# 626 = 228 (kolom kanan di luar editor, konservatif) + 398 (editor dengan tabel 100 px).
-# Riwayat: v1.9.14 memakai 592 dan v1.9.15 memakai 603; keduanya meremehkan tinggi elemen lain (lihat log CI).
+# 557 = 169 (elemen lain) + 388 (editor dengan tabel 90 px).
+# Riwayat: v1.9.14 memakai 592 dan v1.9.15 memakai 603 (keduanya salah karena panel sebenarnya 210 px, bukan 173),
+# v1.9.15.1 memakai 626 (menambal selisih tanpa tahu penyebabnya).
 CHROME_H = RIGHT_COLUMN_FIXED_H + EDITOR_MIN_H
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -77,6 +73,7 @@ def rebalanced_side_height(current: int, table_px: float, scaling: float = 1.0, 
     """
     Penyetelan akhir berdasarkan UKURAN NYATA: tabel subtitle `table_px` (piksel fisik, winfo_height) kurang dari
     `target` -> panel preset dikecilkan sebesar kekurangannya (tabel mendapat tempat itu), minimal SIDE_H_FLOOR.
+    Karena panel kini berukuran tetap (side_box), pengurangan ini benar-benar sampai ke tabel.
     Tidak pernah memperbesar panel (menghindari osilasi). `current` dan hasilnya dalam piksel logis.
     """
     deficit = target - table_px
