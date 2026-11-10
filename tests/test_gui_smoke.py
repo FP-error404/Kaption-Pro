@@ -472,6 +472,70 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual([s.text for s in ws.segments], ["Satu", "Dua", "Tiga"], "subtitle harus pulih dari disk")
         self.assertEqual(self.bad_dialogs(), [])
 
+    def test_11_subtitle_table_and_export_stay_visible_on_small_screens(self):
+        """
+        v1.9.14/15: di 1366x768 dulu tabel subtitle menyusut jadi hanya header; tombol Export tertutup di 1024x768.
+
+        Tes ini TIDAK boleh lolos tanpa mengukur apa pun: penilaian memakai ukuran jendela yang NYATA (bukan yang diminta),
+        jadi runner yang menolak resize tetap menghasilkan pengukuran. Skenario pertama ("apa adanya") tidak meminta
+        resize sama sekali. Minimal satu skenario landscape wajib terukur.
+        """
+        from kaptionpro.core import layout
+        app, ws = self.app, self.ensure_workspace()
+        ws.editor.replace_all(self._segments(*[f"Baris {i}" for i in range(12)]), push_undo=False)
+        measured: list[tuple[int, int]] = []
+        try:
+            for requested in (None, (1366, 768), (1024, 768), (1024, 680)):
+                if requested is not None:
+                    self._resize(*requested)
+                ws._apply_layout()
+                self.pump(0.3)
+                aw, ah = app.winfo_width(), app.winfo_height()
+                tree = ws.editor.tree
+                outside = ws.winfo_height() - ws.side.winfo_height() - ws.editor.winfo_height()
+                print(f"[test_11] diminta={requested or 'apa adanya'}, nyata {aw}x{ah}, mode={ws._mode}, "
+                      f"panel preset diminta={ws._side_h} nyata={ws.side.winfo_height()}, editor={ws.editor.winfo_height()}, "
+                      f"tabel={tree.winfo_height()}, elemen lain={outside} (perkiraan {layout.OUTSIDE_H})")
+                self.shot(f"11_workspace_{aw}x{ah}")
+                if ws._mode != "landscape" or ah < layout.MIN_WINDOW[1]:
+                    continue                      # portrait / lebih pendek dari minsize: bukan sasaran tes ini
+                side = layout.side_panel_height(ah)
+                rows_px = ah - layout.OUTSIDE_H - (side + layout.SCROLLABLE_EXTRA_H) - layout.EDITOR_BASE_H
+                min_tree = max(layout.ROW_H, rows_px + layout.ROW_H - 30)       # header + baris, toleransi 30 px
+                if ah >= 760:
+                    min_tree = max(min_tree, 96)                                # >= ~3 baris data terlihat
+                self.assertGreaterEqual(tree.winfo_height(), min_tree, f"tabel subtitle terlalu pendek di {aw}x{ah}")
+                self.assertLessEqual(abs(outside - layout.OUTSIDE_H), 40,
+                                     f"tinggi elemen lain {outside}px menyimpang dari perkiraan {layout.OUTSIDE_H}px: "
+                                     "perbarui konstanta di core/layout.py")
+                bottom = app.winfo_rooty() + app.winfo_height() + 2
+                for name, widget in (("export_bar", ws.export_bar), ("jobbar", ws.jobbar),
+                                     ("editor", ws.editor), ("text_box", ws.editor.text_box)):
+                    self.assertTrue(widget.winfo_ismapped(), f"{name} tidak tampil di {aw}x{ah}")
+                    self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(), bottom,
+                                         f"{name} meluap keluar jendela {aw}x{ah}")
+                editor_bottom = ws.editor.winfo_rooty() + ws.editor.winfo_height() + 2
+                self.assertLessEqual(ws.editor.text_box.winfo_rooty() + ws.editor.text_box.winfo_height(),
+                                     editor_bottom, "form editor terpotong")
+                measured.append((aw, ah))
+        finally:
+            self._resize(1366, 768)
+            ws._apply_layout()
+            self.pump(0.3)
+        self.assertTrue(measured, "tidak ada satu pun skenario landscape yang terukur: tes ini tidak boleh lolos kosong")
+        print(f"[test_11] skenario landscape yang terukur: {measured}")
+
+    def test_12_theme_radius_is_applied_everywhere(self):
+        import customtkinter as ctk
+        from kaptionpro.config import Theme
+        self.assertEqual(Theme.RADIUS, 4)
+        for name in ("CTkButton", "CTkEntry", "CTkTextbox", "CTkOptionMenu", "CTkComboBox", "CTkFrame"):
+            self.assertEqual(ctk.ThemeManager.theme[name]["corner_radius"], Theme.RADIUS, name)
+        ws = self.ensure_workspace()
+        # ws.side (CTkScrollableFrame) tidak mendukung cget('corner_radius'): dicakup lewat default tema di atas.
+        for widget in (ws.video, ws.timeline, ws.editor, ws.btn_mp4, ws.btn_srt, ws.btn_ass):
+            self.assertEqual(widget.cget("corner_radius"), Theme.RADIUS, type(widget).__name__)
+
     def test_99_close_saves_pending_edit_releases_lock_and_marks_clean_shutdown(self):
         from kaptionpro.core.storage import ProjectStore
         app, ws = self.app, self.ensure_workspace()
