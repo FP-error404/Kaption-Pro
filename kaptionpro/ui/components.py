@@ -21,18 +21,28 @@ class MonogramLogo(tk.Canvas):
                          font=("Georgia", int(size * 0.34), "bold"))
 
 
+def apply_radius_defaults() -> None:
+    """Samakan radius widget CustomTkinter yang TIDAK diberi corner_radius eksplisit (entry, textbox, menu, ...).
+    Panggil sekali sebelum widget dibuat."""
+    theme = ctk.ThemeManager.theme
+    for name in ("CTkButton", "CTkEntry", "CTkTextbox", "CTkOptionMenu", "CTkComboBox", "CTkFrame"):
+        entry = theme.get(name)
+        if isinstance(entry, dict) and "corner_radius" in entry:
+            entry["corner_radius"] = Theme.RADIUS
+
+
 def gold_button(master, text: str, command, *, filled: bool = True, height: int = 42, **kw) -> ctk.CTkButton:
     if filled:
-        return ctk.CTkButton(master, text=text, command=command, height=height, corner_radius=10,
+        return ctk.CTkButton(master, text=text, command=command, height=height, corner_radius=Theme.RADIUS,
                              fg_color=Theme.GOLD, hover_color=Theme.GOLD_HOVER, text_color="#121212",
                              font=Theme.font(14, "bold"), **kw)
-    return ctk.CTkButton(master, text=text, command=command, height=height, corner_radius=10,
+    return ctk.CTkButton(master, text=text, command=command, height=height, corner_radius=Theme.RADIUS,
                          fg_color="transparent", hover_color=Theme.SURFACE_2, text_color=Theme.GOLD,
                          border_width=1, border_color=Theme.GOLD_DIM, font=Theme.font(13, "bold"), **kw)
 
 
 def small_button(master, text: str, command, width: int = 64, danger: bool = False) -> ctk.CTkButton:
-    return ctk.CTkButton(master, text=text, command=command, width=width, height=26, corner_radius=7,
+    return ctk.CTkButton(master, text=text, command=command, width=width, height=26, corner_radius=Theme.RADIUS,
                          fg_color=Theme.SURFACE_2, hover_color=Theme.DANGER if danger else Theme.GOLD_DIM,
                          text_color=Theme.GOLD, font=Theme.font(11, "bold"))
 

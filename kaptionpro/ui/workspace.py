@@ -27,6 +27,7 @@ from ..config import (
 )
 from ..core.storage import BackupInfo
 from ..core.jobs import JobTracker
+from ..core.layout import side_panel_height
 from ..core.privacy import ACK_KEY, is_acknowledged, with_acknowledged
 from ..core.utils import CancelledError, fmt_clock, normalize_hex, safe_filename
 from ..models import (
@@ -65,7 +66,7 @@ class VideoPreviewPanel(ctk.CTkFrame):
                  on_vlc_ready: Callable[[], None] | None = None,
                  on_volume: Callable[[int, bool], None] | None = None,
                  on_player_error: Callable[[str], None] | None = None) -> None:
-        super().__init__(master, fg_color=Theme.VIDEO_BG, corner_radius=14,
+        super().__init__(master, fg_color=Theme.VIDEO_BG, corner_radius=Theme.RADIUS,
                          border_width=2, border_color=Theme.GOLD_DIM)
         self.on_user_seek = on_user_seek
         self.on_tick = on_tick
@@ -114,7 +115,7 @@ class VideoPreviewPanel(ctk.CTkFrame):
         self.file_label.grid(row=3, column=0, pady=(2, 8))
 
         # Overlay Tk (feedback cepat)
-        self.caption_box = ctk.CTkFrame(self, corner_radius=6, fg_color="transparent")
+        self.caption_box = ctk.CTkFrame(self, corner_radius=Theme.RADIUS, fg_color="transparent")
         self.caption_box.grid(row=0, column=0, pady=(0, 60), sticky="s")
         self.cap_left = ctk.CTkLabel(self.caption_box, text="", font=Theme.font(15, "bold"))
         self.cap_right = ctk.CTkLabel(self.caption_box, text="", font=Theme.font(15, "bold"))
@@ -126,7 +127,7 @@ class VideoPreviewPanel(ctk.CTkFrame):
         controls = ctk.CTkFrame(self, fg_color="transparent")
         controls.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 10))
         controls.grid_columnconfigure(1, weight=1)
-        self.play_btn = ctk.CTkButton(controls, text="▶", width=38, height=32, corner_radius=16,
+        self.play_btn = ctk.CTkButton(controls, text="▶", width=38, height=32, corner_radius=Theme.RADIUS,
                                       fg_color=Theme.GOLD, hover_color=Theme.GOLD_HOVER, text_color="#121212",
                                       command=self._toggle_play)
         self.play_btn.grid(row=0, column=0, padx=(0, 10))
@@ -419,7 +420,7 @@ class VideoPreviewPanel(ctk.CTkFrame):
 class SidePanel(ctk.CTkScrollableFrame):
     def __init__(self, master, on_preset, on_style, on_generate, on_style_dialog, on_model_changed,
                  on_translator_changed=None) -> None:
-        super().__init__(master, fg_color=Theme.SURFACE, corner_radius=14, border_width=1,
+        super().__init__(master, fg_color=Theme.SURFACE, corner_radius=Theme.RADIUS, border_width=1,
                          border_color=Theme.BORDER, scrollbar_button_color=Theme.GOLD_DIM,
                          scrollbar_button_hover_color=Theme.GOLD)
         self.on_preset, self.on_style = on_preset, on_style
@@ -430,7 +431,7 @@ class SidePanel(ctk.CTkScrollableFrame):
 
         section_header(self, "LANGUAGE PRESETS")
         for key, preset in LANGUAGE_PRESETS.items():
-            btn = ctk.CTkButton(self, text=preset.label, height=34, corner_radius=10, anchor="w",
+            btn = ctk.CTkButton(self, text=preset.label, height=34, corner_radius=Theme.RADIUS, anchor="w",
                                 font=Theme.font(13, "bold"), command=lambda k=key: self._select_preset(k))
             btn.pack(fill="x", padx=14, pady=3)
             self._preset_buttons[key] = btn
@@ -504,7 +505,7 @@ class TimelineBar(ctk.CTkFrame):
     TRACK_HEIGHT = 34
 
     def __init__(self, master, on_seek_time: Callable[[float], None]) -> None:
-        super().__init__(master, fg_color=Theme.SURFACE, corner_radius=14, border_width=1,
+        super().__init__(master, fg_color=Theme.SURFACE, corner_radius=Theme.RADIUS, border_width=1,
                          border_color=Theme.BORDER)
         self.on_seek_time = on_seek_time
         self.segments: list[SubtitleSegment] = []
@@ -626,7 +627,7 @@ class JobBar(ctk.CTkFrame):
         self.status.grid(row=0, column=0, sticky="ew")
         self.progress = ctk.CTkProgressBar(self, width=170, height=8, progress_color=Theme.GOLD,
                                            fg_color=Theme.SURFACE_2)
-        self.cancel_btn = ctk.CTkButton(self, text="✕ Cancel", width=80, height=26, corner_radius=8,
+        self.cancel_btn = ctk.CTkButton(self, text="✕ Cancel", width=80, height=26, corner_radius=Theme.RADIUS,
                                         fg_color=Theme.SURFACE_2, hover_color=Theme.DANGER,
                                         text_color=Theme.TEXT, font=Theme.font(11, "bold"), command=on_cancel)
 
@@ -682,6 +683,7 @@ class WorkspaceScreen(ctk.CTkFrame):
         self.video_info: VideoInfo | None = None
         self.duration = 60.0
         self._mode: str | None = None
+        self._side_h: int | None = None      # tinggi panel preset yang sedang diterapkan (mode landscape)
         self._after_id = None
         self._autosave_id = None
         self._vlc_sub_id = None
@@ -762,6 +764,21 @@ class WorkspaceScreen(ctk.CTkFrame):
         if w <= 1:
             return
         self._set_mode("portrait" if (w < self.PORTRAIT_BREAKPOINT or w < h) else "landscape")
+        self._fit_side_height()
+
+    def _fit_side_height(self) -> None:
+        """Landscape: tinggi panel preset mengikuti tinggi jendela supaya tabel subtitle & form editor tidak terjepit
+        (dulu tetap 250 px sehingga di layar 1366x768 tabel menyusut jadi hanya baris header)."""
+        if self._mode != "landscape":
+            return
+        try:
+            scaling = float(self._get_widget_scaling())          # API privat CTk; gagal -> skala 1
+        except Exception:  # noqa: BLE001
+            scaling = 1.0
+        height = side_panel_height(self.winfo_height(), scaling)
+        if height != self._side_h:
+            self._side_h = height
+            self.side.configure(height=height)
 
     def _set_mode(self, mode: str) -> None:
         if mode == self._mode:
@@ -776,7 +793,8 @@ class WorkspaceScreen(ctk.CTkFrame):
             self.grid_columnconfigure(0, weight=1, minsize=380)
             self.grid_columnconfigure(1, weight=0, minsize=500)
             self.grid_rowconfigure(2, weight=1)
-            self.side.configure(height=250)
+            self._side_h = None                # paksa hitung ulang untuk ukuran jendela saat ini
+            self._fit_side_height()
             self.video.grid(row=1, column=0, rowspan=2, sticky="nsew", padx=(12, 6), pady=(10, 6))
             if self._side_visible:
                 self.side.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=(10, 6))
@@ -792,6 +810,7 @@ class WorkspaceScreen(ctk.CTkFrame):
             self.grid_columnconfigure(1, weight=0, minsize=0)
             self.grid_rowconfigure(1, weight=3, minsize=140)
             self.grid_rowconfigure(4, weight=4, minsize=260)
+            self._side_h = None
             self.side.configure(height=150)
             for row, widget in enumerate((self.video, self.side, self.timeline, self.editor), start=1):
                 if widget is self.side and not self._side_visible:

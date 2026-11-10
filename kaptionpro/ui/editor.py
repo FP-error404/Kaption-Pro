@@ -37,7 +37,7 @@ class SubtitleEditorPanel(ctk.CTkFrame):
                  on_select: Callable[[SubtitleSegment], None],
                  get_playhead: Callable[[], float],
                  before_op: Callable[[str], None] | None = None) -> None:
-        super().__init__(master, fg_color=Theme.SURFACE, corner_radius=14, border_width=1,
+        super().__init__(master, fg_color=Theme.SURFACE, corner_radius=Theme.RADIUS, border_width=1,
                          border_color=Theme.BORDER)
         self.on_changed, self.on_select, self.get_playhead = on_changed, on_select, get_playhead
         self.before_op = before_op or (lambda _reason: None)     # mis. membuat backup sebelum operasi besar
@@ -53,7 +53,7 @@ class SubtitleEditorPanel(ctk.CTkFrame):
         self._fill_gen = 0
         self.filter_key = "all"
 
-        self.grid_rowconfigure(3, weight=1)
+        self.grid_rowconfigure(3, weight=1, minsize=80)      # tabel subtitle tidak boleh menyusut jadi hanya header
         self.grid_columnconfigure(0, weight=1)
         self._build_header()
         self._build_tree()
@@ -105,7 +105,7 @@ class SubtitleEditorPanel(ctk.CTkFrame):
         style.map("KP.Treeview", background=[("selected", Theme.GOLD)], foreground=[("selected", "#121212")])
         style.map("KP.Treeview.Heading", background=[("active", Theme.GOLD_DIM)])
 
-        wrap = ctk.CTkFrame(self, fg_color=Theme.SURFACE_2, corner_radius=8)
+        wrap = ctk.CTkFrame(self, fg_color=Theme.SURFACE_2, corner_radius=Theme.RADIUS)
         wrap.grid(row=3, column=0, sticky="nsew", padx=8, pady=(4, 6))
         wrap.grid_rowconfigure(0, weight=1)
         wrap.grid_columnconfigure(0, weight=1)
@@ -150,7 +150,7 @@ class SubtitleEditorPanel(ctk.CTkFrame):
         actions = ctk.CTkFrame(form, fg_color="transparent")
         actions.grid(row=2, column=0, columnspan=5, sticky="ew")
         actions.grid_columnconfigure(5, weight=1)
-        ctk.CTkButton(actions, text="✔ Apply", width=72, height=28, corner_radius=8, fg_color=Theme.GOLD,
+        ctk.CTkButton(actions, text="✔ Apply", width=72, height=28, corner_radius=Theme.RADIUS, fg_color=Theme.GOLD,
                       hover_color=Theme.GOLD_HOVER, text_color="#121212", font=Theme.font(11, "bold"),
                       command=self._apply).grid(row=0, column=0, padx=(0, 3))
         small_button(actions, "＋ Add", self._add_line, 60).grid(row=0, column=1, padx=2)

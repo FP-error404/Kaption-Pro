@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 class RecentProjectCard(ctk.CTkFrame):
     def __init__(self, master, project: Project, on_open, on_remove) -> None:
-        super().__init__(master, fg_color=Theme.SURFACE_2, corner_radius=14,
+        super().__init__(master, fg_color=Theme.SURFACE_2, corner_radius=Theme.RADIUS,
                          border_width=1, border_color=Theme.BORDER)
         self.project, self.on_open = project, on_open
         self.grid_columnconfigure(0, weight=1)
@@ -29,7 +29,7 @@ class RecentProjectCard(ctk.CTkFrame):
 
         ctk.CTkLabel(self, text="🎬", font=Theme.font(26)).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 0))
         self.remove_btn = ctk.CTkButton(
-            self, text="✕", width=26, height=26, corner_radius=6, fg_color="transparent",
+            self, text="✕", width=26, height=26, corner_radius=Theme.RADIUS, fg_color="transparent",
             hover_color=Theme.DANGER, text_color=Theme.TEXT_MUTED, font=Theme.font(11, "bold"),
             command=lambda: on_remove(project))
         self.remove_btn.grid(row=0, column=1, padx=(0, 8), pady=(8, 0), sticky="ne")
@@ -103,7 +103,7 @@ class WelcomeScreen(ctk.CTkFrame):
         self._columns = 0
         projects = self.app.store.projects
         if not projects:
-            empty = ctk.CTkFrame(self.cards_frame, fg_color=Theme.SURFACE, corner_radius=14,
+            empty = ctk.CTkFrame(self.cards_frame, fg_color=Theme.SURFACE, corner_radius=Theme.RADIUS,
                                  border_width=1, border_color=Theme.BORDER)
             empty.pack(fill="x", padx=6, pady=6)
             ctk.CTkLabel(empty, text="No recent projects yet.\nPress START NEW PROJECT to begin.",

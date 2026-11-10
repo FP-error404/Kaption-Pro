@@ -484,7 +484,7 @@ class BackupDialog(ctk.CTkToplevel):
                                 "besar (AI, import, Auto-Fix, edit massal, pemulihan). Disimpan 15 versi terakhir.",
                      text_color=Theme.TEXT_MUTED, font=Theme.font(10), wraplength=470, justify="left",
                      anchor="w").pack(fill="x", padx=18, pady=(0, 8))
-        box = ctk.CTkScrollableFrame(self, fg_color=Theme.SURFACE_2, corner_radius=10,
+        box = ctk.CTkScrollableFrame(self, fg_color=Theme.SURFACE_2, corner_radius=Theme.RADIUS,
                                      scrollbar_button_color=Theme.GOLD_DIM)
         box.pack(fill="both", expand=True, padx=18, pady=(0, 10))
         if not backups:
@@ -609,7 +609,7 @@ class GuideDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(self, text="PEMERIKSAAN DEPENDENSI", text_color=Theme.GOLD_BRIGHT, anchor="w",
                      font=Theme.font(15, "bold", serif=True)).pack(fill="x", padx=18, pady=(14, 4))
-        self.checks_frame = ctk.CTkFrame(self, fg_color=Theme.SURFACE_2, corner_radius=10)
+        self.checks_frame = ctk.CTkFrame(self, fg_color=Theme.SURFACE_2, corner_radius=Theme.RADIUS)
         self.checks_frame.pack(fill="both", expand=True, padx=18, pady=(0, 10))
 
         ctk.CTkLabel(self, text="PRIVASI TERJEMAHAN", text_color=Theme.GOLD_BRIGHT, anchor="w",
