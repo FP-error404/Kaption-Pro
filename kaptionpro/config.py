@@ -114,6 +114,7 @@ except Exception as exc:  # noqa: BLE001
 
 
 class Theme:
+    RADIUS = 4               # satu-satunya radius sudut (tajam, kesan "pro"); 0 hanya untuk bingkai layar penuh
     BG = "#121212"
     SURFACE = "#1A1A1A"
     SURFACE_2 = "#222222"

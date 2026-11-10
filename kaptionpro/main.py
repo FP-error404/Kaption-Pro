@@ -17,11 +17,13 @@ from .config import (APP_DIR, HAS_DEEP_TRANSLATOR, HAS_FASTER_WHISPER, HAS_VLC, 
 
 require_gui()          # sebelum modul UI diimpor (kelasnya turunan widget CustomTkinter)
 
+from .core.layout import startup_geometry, window_minsize
 from .core.lifecycle import ShutdownCoordinator, drain_queue
 from .core.storage import ProjectStore, SettingsStore
 from .models import Project
 from .services.ai_service import AiService
 from .services.ffmpeg_service import FFmpegService
+from .ui.components import apply_radius_defaults
 from .ui.dialogs import GuideDialog
 from .ui.welcome import WelcomeScreen
 from .ui.workspace import WorkspaceScreen
@@ -31,10 +33,16 @@ class KaptionProApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         ctk.set_appearance_mode("dark")
+        apply_radius_defaults()
         ttk.Style(self).theme_use("clam")
         self.title(f"KaptionPro v{__version__}")
-        self.geometry("1280x800")
-        self.minsize(420, 640)
+        try:                       # faktor skala DPI CustomTkinter (API privat: jangan sampai menggagalkan startup)
+            scaling = float(self._get_window_scaling())
+        except Exception:  # noqa: BLE001
+            scaling = 1.0
+        w, h, x, y = startup_geometry(self.winfo_screenwidth(), self.winfo_screenheight(), scaling)
+        self.geometry(f"{w}x{h}+{x}+{y}")          # dibatasi layar: tombol Export tidak boleh tertutup taskbar
+        self.minsize(*window_minsize(w, h))        # layar kecil: jangan paksa jendela lebih besar dari layar
         self.configure(fg_color=Theme.BG)
 
         self.store = ProjectStore()

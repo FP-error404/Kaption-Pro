@@ -96,6 +96,26 @@ Perubahan v1.8 (audit keamanan data v1.7)
  * File partial FFmpeg bernama unik per proses (pid + UUID): export bersamaan ke tujuan yang sama
    tidak saling menghapus; export kedua ditolak dengan pesan jelas; partial basi milik proses mati dibersihkan.
 
+(Perubahan v1.9.15 - UI Hardening & Edge Cases (tanpa fitur baru):
+ * core/layout.py: CHROME_H tidak lagi angka ajaib. Diuraikan dari komponen bernama (top bar 48 + padding grid 46 +
+   tombol export 42 + job bar 33 + padding CTkScrollableFrame 8 + editor minimum 426 = 603), dan tiap komponen dijaga
+   tes (termasuk pencocokan dengan nilai pady di workspace.py). Koreksi: v1.9.14 memakai 592, selisih 11 px.
+ * startup_geometry() aman di layar sangat kecil (mis. 640x480 -> 600x370, dulu 600x640 sehingga bagian bawah terpotong).
+   Batas bawah aplikasi ikut mengecil mengikuti layar (window_minsize), dengan lantai mutlak 320x240.
+ * test_11 tidak bisa lolos kosong: menilai ukuran jendela NYATA (bukan yang diminta), selalu menyertakan skenario
+   "apa adanya", mengukur ulang tinggi elemen lain, dan wajib punya minimal satu skenario landscape yang terukur.
+ * TESTING.md disinkronkan (Ruff wajib sejak v1.9.12) dan dijaga tes agar tidak menyimpang dari workflow.)
+
+(Perubahan v1.9.14 - Tampilan lebih tajam, tata letak aman di layar kecil, CI tanpa peringatan usang:
+ * Theme.RADIUS = 4 menggantikan semua radius sudut 6/7/8/10/14/16 (tombol, panel, dialog); widget yang tidak
+   diberi radius eksplisit (entry, textbox, menu) ikut lewat apply_radius_defaults().
+ * Layar 1366x768 / 1024x768: tinggi panel preset kini mengikuti tinggi jendela (120-250 px, core/layout.py),
+   sehingga tabel subtitle dan form editor tidak lagi terjepit (dulu tabel hanya menampilkan baris header).
+   Tabel punya tinggi minimum di grid editor sebagai pengaman.
+ * Jendela awal dibatasi ukuran layar (sebelumnya selalu 1280x800 sehingga tombol Export tertutup taskbar di 1024x768).
+ * CI: actions/checkout v6, setup-python v6, upload-artifact v7 (Node 24); runner Linux dipatok ubuntu-24.04
+   karena ubuntu-latest sedang berpindah ke Ubuntu 26.04.)
+
 (Perubahan v1.9.13 - Storage Reliability & Crash Recovery (hanya core/storage.py; UI tidak berubah):
  * Penanda hapus (tombstone) kini berarti "penghapusan DIMULAI", bukan "selesai". Bila aplikasi mati di tengah
    hapus project (mis. subtitle sudah terhapus tetapi folder backup belum), saat store dibuka
@@ -184,4 +204,4 @@ Perubahan v1.8 (audit keamanan data v1.7)
 output, backup berversi, lock atomik, VLC volume/frame-step, editor cari/filter/undo-redo/bulk.)
 """
 
-__version__ = "1.9.13"
+__version__ = "1.9.15"
