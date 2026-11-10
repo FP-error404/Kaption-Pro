@@ -23,26 +23,27 @@ class ChromeBreakdownTests(unittest.TestCase):
 
     def test_chrome_is_the_sum_of_its_named_components(self):
         self.assertEqual(layout.OUTSIDE_H, layout.TOP_BAR_H + layout.GRID_PADDING_H + layout.EXPORT_BAR_H + layout.JOB_BAR_H)
-        self.assertEqual(layout.RIGHT_COLUMN_FIXED_H,
-                         layout.OUTSIDE_H + layout.SCROLLABLE_EXTRA_H + layout.UNEXPLAINED_SLACK_H)
+        self.assertEqual(layout.RIGHT_COLUMN_FIXED_H, layout.OUTSIDE_H)
         self.assertEqual(layout.EDITOR_MIN_H, layout.EDITOR_CHROME_H + layout.TABLE_MIN_PX)
         self.assertEqual(layout.CHROME_H, layout.RIGHT_COLUMN_FIXED_H + layout.EDITOR_MIN_H)
 
     def test_chrome_value_is_pinned(self):
         # Mengubah komponen apa pun WAJIB disengaja: perbarui angka ini bersama komentar di core/layout.py.
         self.assertEqual(
-            (layout.TOP_BAR_H, layout.GRID_PADDING_H, layout.EXPORT_BAR_H, layout.JOB_BAR_H, layout.SCROLLABLE_EXTRA_H,
-             layout.UNEXPLAINED_SLACK_H, layout.EDITOR_CHROME_H, layout.ROW_H, layout.TABLE_MIN_PX, layout.SIDE_H_FLOOR),
-            (48, 46, 42, 33, 8, 51, 298, 26, 100, 80))
+            (layout.TOP_BAR_H, layout.GRID_PADDING_H, layout.EXPORT_BAR_H, layout.JOB_BAR_H, layout.CI_OUTSIDE_H,
+             layout.EDITOR_CHROME_H, layout.EDITOR_TOOLBAR_SAVED_H, layout.ROW_H, layout.TABLE_MIN_PX, layout.SIDE_H_FLOOR),
+            (48, 46, 42, 33, 164, 298, 30, 26, 90, 120))
         self.assertEqual(layout.OUTSIDE_H, 169)
-        self.assertEqual(layout.RIGHT_COLUMN_FIXED_H, 228)
-        self.assertEqual(layout.EDITOR_MIN_H, 398)
-        self.assertEqual(layout.CHROME_H, 626)
+        self.assertEqual(layout.RIGHT_COLUMN_FIXED_H, 169)
+        self.assertEqual(layout.EDITOR_MIN_H, 388)
+        self.assertEqual(layout.CHROME_H, 557)
 
-    def test_fixed_height_covers_the_largest_ci_measurement(self):
-        # CI v1.9.15: 768 - 165 - 394 = 209 (Linux), 749 - 146 - 375 = 228 (Windows). Perkiraan awal harus >= keduanya.
-        self.assertGreaterEqual(layout.RIGHT_COLUMN_FIXED_H, 209)
-        self.assertGreaterEqual(layout.RIGHT_COLUMN_FIXED_H, 228)
+    def test_other_elements_height_matches_ci_in_both_oses(self):
+        # Log CI v1.9.15 dengan panel yang NYATA 210 px (bukan 165/146 yang diminta): hasilnya sama di Linux dan Windows.
+        self.assertEqual(768 - 210 - 394, layout.CI_OUTSIDE_H)        # Linux
+        self.assertEqual(749 - 210 - 375, layout.CI_OUTSIDE_H)        # Windows
+        self.assertGreaterEqual(layout.RIGHT_COLUMN_FIXED_H, layout.CI_OUTSIDE_H)
+        self.assertLessEqual(layout.RIGHT_COLUMN_FIXED_H - layout.CI_OUTSIDE_H, 10)
 
     def test_editor_chrome_matches_ci_measurements(self):
         # editor - tabel: 394 - 96 (Linux) dan 375 - 77 (Windows)
@@ -52,15 +53,19 @@ class ChromeBreakdownTests(unittest.TestCase):
     def test_grid_padding_matches_the_pady_values_in_workspace(self):
         # 10 + 6 (panel preset) + 6 + 6 (editor) + 6 + 2 (export bar) + 2 + 8 (job bar) = 46
         src = (ROOT / "kaptionpro" / "ui" / "workspace.py").read_text(encoding="utf-8")
-        self.assertIn('self.side.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=(10, 6))', src)
+        self.assertIn('self.side_box.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=(10, 6))', src)
         self.assertIn('self.editor.grid(row=2, column=1, rowspan=2, sticky="nsew", padx=(6, 12), pady=6)', src)
         self.assertIn('self.export_bar.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=(6, 2))', src)
         self.assertIn('self.jobbar.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(2, 8))', src)
         self.assertEqual(10 + 6 + 6 + 6 + 6 + 2 + 2 + 8, layout.GRID_PADDING_H)
 
-    def test_scrollable_frame_extra_is_twice_the_theme_radius(self):
-        radius = int(re.search(r"(?m)^    RADIUS = (\d+)\b", (ROOT / "kaptionpro" / "config.py").read_text("utf-8")).group(1))
-        self.assertEqual(layout.SCROLLABLE_EXTRA_H, 2 * radius)
+    def test_side_panel_lives_in_a_fixed_size_container(self):
+        # CTkScrollableFrame tidak mau di bawah ~210 px (scrollbar meminta 200 px): tinggi dipaksa lewat wadah tetap.
+        src = (ROOT / "kaptionpro" / "ui" / "workspace.py").read_text(encoding="utf-8")
+        self.assertIn("self.side_box.grid_propagate(False)", src)
+        self.assertIn("self.side = SidePanel(self.side_box,", src)
+        self.assertNotIn("self.side.configure(height", src, "configure(height=) pada CTkScrollableFrame tidak berpengaruh")
+        self.assertIn("self.side_box.configure(height=", src)
 
     def test_row_height_matches_the_treeview_style(self):
         src = (ROOT / "kaptionpro" / "ui" / "editor.py").read_text(encoding="utf-8")
@@ -68,13 +73,13 @@ class ChromeBreakdownTests(unittest.TestCase):
 
     def test_documented_boundaries(self):
         lo, hi = layout.CHROME_H + layout.SIDE_H_MIN, layout.CHROME_H + layout.SIDE_H_MAX
-        self.assertEqual((lo, hi), (746, 876))
+        self.assertEqual((lo, hi), (677, 807))
         self.assertEqual(layout.side_panel_height(lo - 1), layout.SIDE_H_MIN)
         self.assertEqual(layout.side_panel_height(lo), layout.SIDE_H_MIN)
         self.assertEqual(layout.side_panel_height(lo + 1), layout.SIDE_H_MIN + 1)
         self.assertEqual(layout.side_panel_height(hi), layout.SIDE_H_MAX)
         self.assertEqual(layout.side_panel_height(hi + 100), layout.SIDE_H_MAX)
-        self.assertEqual(layout.side_panel_height(768), 142)
+        self.assertEqual(layout.side_panel_height(768), 211)
 
     def test_estimate_leaves_the_editor_its_minimum_when_the_window_is_tall_enough(self):
         for height in range(layout.CHROME_H + layout.SIDE_H_MIN, 1400):
@@ -86,24 +91,69 @@ class ChromeBreakdownTests(unittest.TestCase):
         for height in range(300, layout.CHROME_H + layout.SIDE_H_MIN):
             self.assertEqual(layout.side_panel_height(height), layout.SIDE_H_MIN)
 
+    def test_ci_windows_get_the_table_minimum_with_the_new_panel_height(self):
+        # Kasus yang gagal di CI v1.9.15 (tabel 96 dan 77 px): panel kini benar-benar setinggi perkiraan.
+        for window in (768, 749):
+            side = layout.side_panel_height(window)
+            table = window - layout.CI_OUTSIDE_H - side - layout.EDITOR_CHROME_H
+            self.assertGreaterEqual(table, layout.TABLE_MIN_PX, f"jendela {window}px: tabel {table}px")
+
+
+class EditorAndTimelineCompactnessTests(unittest.TestCase):
+    """Penghematan tinggi v1.9.15.2 (dijaga lewat sumber agar tidak diam-diam kembali)."""
+
+    def setUp(self) -> None:
+        self.editor = (ROOT / "kaptionpro" / "ui" / "editor.py").read_text(encoding="utf-8")
+        self.workspace = (ROOT / "kaptionpro" / "ui" / "workspace.py").read_text(encoding="utf-8")
+
+    def test_toolbar_is_a_single_row_with_a_tools_menu(self):
+        self.assertNotIn("row=i // 5", self.editor)
+        self.assertIn("grid(row=0, column=i, padx=2, pady=2, sticky=\"w\")", self.editor)
+        self.assertIn("self._tools_menu = tk.Menu(", self.editor)
+        self.assertIn("def _open_tools_menu", self.editor)
+
+    def test_tools_menu_groups_the_rarely_used_actions(self):
+        block = self.editor[self.editor.index("TOOLS_MENU = ("):self.editor.index("    FILTERS = {")]
+        for method in ("_import_srt", "_shift_all", "_bulk_edit", "_split_selected", "_merge_selected"):
+            self.assertIn(f'"{method}"', block)
+            self.assertIn(f"def {method}(", self.editor, f"{method} harus ada")
+
+    def test_frequent_actions_stay_as_buttons(self):
+        for text in ("↶ Undo", "↷ Redo", "🔍 Cari/Ganti", "✔ Auto-Fix"):
+            self.assertIn(f'("{text}"', self.editor)
+
+    def test_toolbar_fits_the_editor_width(self):
+        # Lebar editor minimum ~ 500 - 18 (padx grid) - 20 (padx toolbar); tombol: 62 + 62 + 100 + 82 + menu 80 + padding 4 x 5.
+        widths = 62 + 62 + 100 + 82 + 80 + 4 * 5
+        self.assertLessEqual(widths, 500 - 18 - 20)
+
+    def test_timeline_is_compact(self):
+        # ruler 20 + (6 + 1) + 3 track x (34 + 2 x 2) + spacer 2 + border 2 = 145 px (dulu ~160)
+        self.assertIn('pady=(6, 1))', self.workspace)
+        self.assertEqual(self.workspace.count("pady=2)"), 2)          # label track + canvas track
+        self.assertIn('height=2, fg_color="transparent").grid(row=4, column=0)', self.workspace)
+        self.assertIn("TRACK_HEIGHT = 34", self.workspace)
+        self.assertEqual(20 + 7 + 3 * (34 + 4) + 2 + 2, 145)
+
 
 class RebalanceTests(unittest.TestCase):
-    """Penyetelan akhir dari ukuran tabel NYATA (v1.9.15.1): perkiraan konstanta boleh meleset, tabel tetap dijaga."""
+    """Penyetelan akhir dari ukuran tabel NYATA: perkiraan konstanta boleh meleset, tabel tetap dijaga."""
 
     def test_nothing_changes_when_the_table_is_big_enough(self):
-        self.assertEqual(layout.rebalanced_side_height(165, 100), 165)
+        self.assertEqual(layout.rebalanced_side_height(165, 90), 165)
         self.assertEqual(layout.rebalanced_side_height(165, 240), 165)
 
     def test_panel_shrinks_by_the_deficit(self):
-        self.assertEqual(layout.rebalanced_side_height(165, 96), 161)       # CI Linux: tabel 96
-        self.assertEqual(layout.rebalanced_side_height(146, 77), 123)       # CI Windows: tabel 77
+        self.assertEqual(layout.rebalanced_side_height(165, 80), 155)
+        self.assertEqual(layout.rebalanced_side_height(146, 77), 133)
 
     def test_panel_never_goes_below_the_floor(self):
+        self.assertEqual(layout.rebalanced_side_height(130, 10), layout.SIDE_H_FLOOR)
         self.assertEqual(layout.rebalanced_side_height(120, 10), layout.SIDE_H_FLOOR)
-        self.assertEqual(layout.rebalanced_side_height(90, 30), layout.SIDE_H_FLOOR)
+        self.assertEqual(layout.SIDE_H_FLOOR, layout.SIDE_H_MIN, "panel tidak dipaksa lebih kecil dari ukuran nyamannya")
 
     def test_panel_is_never_enlarged(self):
-        for table in (2, 40, 99, 100, 101, 400):
+        for table in (2, 40, 89, 90, 91, 400):
             self.assertLessEqual(layout.rebalanced_side_height(150, table), 150)
 
     def test_unmeasured_table_is_ignored(self):
@@ -111,19 +161,20 @@ class RebalanceTests(unittest.TestCase):
         self.assertEqual(layout.rebalanced_side_height(150, 1), 150)
 
     def test_dpi_scaling_converts_physical_deficit_to_logical_pixels(self):
-        self.assertEqual(layout.rebalanced_side_height(165, 80, scaling=1.25), 165 - 16)   # 20 px fisik = 16 logis
+        self.assertEqual(layout.rebalanced_side_height(165, 70, scaling=1.25), 165 - 16)   # 20 px fisik = 16 logis
 
     def test_guaranteed_table_px(self):
         self.assertEqual(layout.guaranteed_table_px(768), layout.TABLE_MIN_PX)
-        self.assertEqual(layout.guaranteed_table_px(749), layout.TABLE_MIN_PX)
-        self.assertEqual(layout.guaranteed_table_px(700), 94)
-        self.assertEqual(layout.guaranteed_table_px(680), 74)
+        self.assertEqual(layout.guaranteed_table_px(700), layout.TABLE_MIN_PX)
+        self.assertEqual(layout.guaranteed_table_px(680), layout.TABLE_MIN_PX)
+        self.assertEqual(layout.guaranteed_table_px(670), 83)
+        self.assertEqual(layout.guaranteed_table_px(640), 53)
         self.assertEqual(layout.guaranteed_table_px(300), 0)
         self.assertEqual(layout.guaranteed_table_px(1200), layout.TABLE_MIN_PX)
 
     def test_closed_loop_meets_the_guarantee_whatever_the_real_fixed_height_is(self):
-        """Simulasi UI: tabel = tinggi jendela - K - panel - 298, K (elemen lain) tidak diketahui persis (CI: 209..228)."""
-        for fixed in range(190, 251, 5):                                  # K sebenarnya, termasuk di luar rentang CI
+        """Simulasi UI: tabel = tinggi jendela - K - panel - 298, K (elemen lain) tidak diketahui persis."""
+        for fixed in range(140, 221, 5):                                  # CI: 164; rentang lebar sebagai uji ketahanan
             for window in range(640, 1201, 8):
                 side = layout.side_panel_height(window)
                 for _ in range(4):                                        # maksimal 4 putaran seperti di aplikasi
@@ -133,16 +184,6 @@ class RebalanceTests(unittest.TestCase):
                 reachable = window - fixed - layout.SIDE_H_FLOOR - layout.EDITOR_CHROME_H
                 want = min(layout.TABLE_MIN_PX, reachable)
                 self.assertGreaterEqual(table, want, f"K={fixed}, jendela {window}: tabel {table} < {want}")
-
-    def test_closed_loop_reproduces_the_ci_failures_and_fixes_them(self):
-        # Linux: jendela 768, K=209, perkiraan lama menghasilkan tabel 96; Windows: jendela 749, K=228, tabel 77.
-        for window, fixed, was in ((768, 209, 96), (749, 228, 77)):
-            side = layout.side_panel_height(window)
-            for _ in range(4):
-                side = layout.rebalanced_side_height(side, window - fixed - side - layout.EDITOR_CHROME_H)
-            self.assertGreaterEqual(window - fixed - side - layout.EDITOR_CHROME_H, layout.TABLE_MIN_PX)
-        self.assertLess(96, layout.TABLE_MIN_PX)
-        self.assertLess(77, layout.TABLE_MIN_PX)
 
     def test_workspace_wires_the_rebalance(self):
         src = (ROOT / "kaptionpro" / "ui" / "workspace.py").read_text(encoding="utf-8")

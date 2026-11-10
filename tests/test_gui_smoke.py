@@ -481,8 +481,8 @@ class GuiSmokeTests(unittest.TestCase):
         resize sama sekali. Minimal satu skenario landscape wajib terukur.
 
         Catatan pengukuran: ws.side adalah CTkScrollableFrame; ws.side.winfo_height() adalah tinggi ISI di dalam kanvas
-        (bisa 496 px dan itu normal, isinya di-scroll), BUKAN tinggi panel di grid. Tinggi panel yang sebenarnya adalah
-        milik bingkai luarnya (_parent_frame).
+        (bisa 496 px dan itu normal, isinya di-scroll), BUKAN tinggi panel. Tinggi panel yang sebenarnya = tinggi wadah
+        tetapnya (ws.side_box). Wadah itu ada karena CTkScrollableFrame tidak mau di bawah ~210 px (v1.9.15.2).
         """
         from kaptionpro.core import layout
         app, ws = self.app, self.ensure_workspace()
@@ -496,21 +496,25 @@ class GuiSmokeTests(unittest.TestCase):
                 self.pump(0.6)                    # beri waktu penyetelan akhir tinggi panel (beberapa putaran @ 60 ms)
                 aw, ah = app.winfo_width(), app.winfo_height()
                 tree = ws.editor.tree
-                outer = getattr(ws.side, "_parent_frame", ws.side)        # bingkai luar yang ada di grid
+                outer = ws.side_box                                        # tinggi panel yang sebenarnya
                 outside = ws.winfo_height() - outer.winfo_height() - ws.editor.winfo_height()
                 print(f"[test_11] diminta={requested or 'apa adanya'}, nyata {aw}x{ah}, mode={ws._mode}, "
                       f"panel preset: diminta={ws._side_h} nyata={outer.winfo_height()} (isi di dalam kanvas="
                       f"{ws.side.winfo_height()}), editor={ws.editor.winfo_height()}, tabel={tree.winfo_height()}, "
-                      f"elemen lain={outside} (perkiraan {layout.OUTSIDE_H}), "
-                      f"extra panel={outer.winfo_height() - (ws._side_h or 0)} (perkiraan {layout.SCROLLABLE_EXTRA_H})")
+                      f"elemen lain={outside} (CI sebelumnya {layout.CI_OUTSIDE_H}), "
+                      f"editor tanpa tabel={ws.editor.winfo_height() - tree.winfo_height()} (perkiraan {layout.EDITOR_CHROME_H}, "
+                      f"toolbar kini 1 baris)")
                 self.shot(f"11_workspace_{aw}x{ah}")
                 if ws._mode != "landscape" or ah < layout.MIN_WINDOW[1]:
                     continue                      # portrait / lebih pendek dari minsize: bukan sasaran tes ini
                 want = layout.guaranteed_table_px(ah)
-                self.assertGreaterEqual(tree.winfo_height(), want - 10,
+                self.assertGreaterEqual(tree.winfo_height(), want - 8,
                                         f"tabel subtitle {tree.winfo_height()}px di {aw}x{ah}, dijamin >= {want}px")
-                self.assertGreater(outside, 100, f"elemen lain {outside}px: panel/editor tumpang-tindih atau salah ukur")
-                self.assertLess(outside, 300, f"elemen lain {outside}px tidak masuk akal")
+                scale = ws._widget_scaling()
+                self.assertLessEqual(abs(outer.winfo_height() - round((ws._side_h or 0) * scale)), 3,
+                                     f"panel preset {outer.winfo_height()}px, diminta {ws._side_h}px: wadah tetap tidak dipatuhi")
+                self.assertLessEqual(abs(outside - layout.CI_OUTSIDE_H), 40,
+                                     f"elemen lain {outside}px menyimpang dari hasil ukur CI ({layout.CI_OUTSIDE_H}px)")
                 bottom = app.winfo_rooty() + app.winfo_height() + 2
                 for name, widget in (("export_bar", ws.export_bar), ("jobbar", ws.jobbar),
                                      ("editor", ws.editor), ("text_box", ws.editor.text_box)):
@@ -527,6 +531,28 @@ class GuiSmokeTests(unittest.TestCase):
             self.pump(0.3)
         self.assertTrue(measured, "tidak ada satu pun skenario landscape yang terukur: tes ini tidak boleh lolos kosong")
         print(f"[test_11] skenario landscape yang terukur: {measured}")
+
+    def test_13_editor_toolbar_is_one_row_with_a_working_tools_menu(self):
+        ws = self.ensure_workspace()
+        ed = ws.editor
+        self.pump(0.2)
+        self.assertEqual(ed._tools_menu.index("end"), len(ed.TOOLS_MENU) - 1)
+        for index, (label, method) in enumerate(ed.TOOLS_MENU):
+            self.assertEqual(ed._tools_menu.entrycget(index, "label"), label)
+            self.assertTrue(callable(getattr(ed, method)), method)
+        # tombol Alat berada di baris yang sama dengan Undo (satu baris toolbar)
+        undo = None
+        for child in ed._tools_button.master.winfo_children():
+            try:
+                if "Undo" in str(child.cget("text")):
+                    undo = child
+            except Exception:  # noqa: BLE001  (widget tanpa opsi text)
+                pass
+        self.assertIsNotNone(undo, "tombol Undo tidak ditemukan di toolbar")
+        self.assertLess(abs(ed._tools_button.winfo_rooty() - undo.winfo_rooty()), 6, "toolbar masih lebih dari satu baris")
+        # seluruh tombol toolbar muat di dalam lebar editor
+        right_edge = ed._tools_button.winfo_rootx() + ed._tools_button.winfo_width()
+        self.assertLessEqual(right_edge, ed.winfo_rootx() + ed.winfo_width() + 2, "tombol Alat terpotong")
 
     def test_12_theme_radius_is_applied_everywhere(self):
         import customtkinter as ctk
