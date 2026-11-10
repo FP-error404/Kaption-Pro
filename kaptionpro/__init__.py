@@ -96,6 +96,17 @@ Perubahan v1.8 (audit keamanan data v1.7)
  * File partial FFmpeg bernama unik per proses (pid + UUID): export bersamaan ke tujuan yang sama
    tidak saling menghapus; export kedua ditolak dengan pesan jelas; partial basi milik proses mati dibersihkan.
 
+(Perubahan v1.9.15.1 - Perbaikan test_11 (gui-smoke gagal di Linux dan Windows):
+ * Penyebab 1 (salah ukur): ws.side adalah CTkScrollableFrame, jadi ws.side.winfo_height() = tinggi ISI di dalam
+   kanvas (496 px, di-scroll), bukan tinggi panel di grid. Tes kini mengukur bingkai luar (_parent_frame) dan mencetak
+   keduanya; nilai "elemen lain" -122 berasal dari salah ukur ini.
+ * Penyebab 2 (nyata): perkiraan tinggi elemen lain meleset 32 px (Linux) dan 51 px (Windows), sehingga tabel
+   subtitle hanya 96 dan 77 px. Konstanta dikalibrasi ulang dari log CI (CHROME_H 626), dan ditambah penyetelan akhir
+   berbasis ukuran NYATA: WorkspaceScreen._rebalance_side mengecilkan panel preset (sampai 80 px) bila tabel di bawah
+   100 px, sehingga ketidaktepatan perkiraan tidak lagi membuat tabel terjepit. Tidak pernah memperbesar panel.
+ * Jaminan tabel >= 100 px berlaku untuk jendela setinggi ~706 px ke atas; di bawah itu tabel mendapat ruang
+   terbesar yang masih mungkin (core/layout.py: guaranteed_table_px).)
+
 (Perubahan v1.9.15 - UI Hardening & Edge Cases (tanpa fitur baru):
  * core/layout.py: CHROME_H tidak lagi angka ajaib. Diuraikan dari komponen bernama (top bar 48 + padding grid 46 +
    tombol export 42 + job bar 33 + padding CTkScrollableFrame 8 + editor minimum 426 = 603), dan tiap komponen dijaga
@@ -204,4 +215,4 @@ Perubahan v1.8 (audit keamanan data v1.7)
 output, backup berversi, lock atomik, VLC volume/frame-step, editor cari/filter/undo-redo/bulk.)
 """
 
-__version__ = "1.9.15"
+__version__ = "1.9.15.1"
