@@ -164,18 +164,34 @@ class RebalanceTests(unittest.TestCase):
         self.assertEqual(layout.rebalanced_side_height(165, 70, scaling=1.25), 165 - 16)   # 20 px fisik = 16 logis
 
     def test_guaranteed_table_px(self):
+        # v1.9.15.3: jendela < SIDE_AUTOHIDE_H tanpa panel preset, jadi jaminan 90 px berlaku sampai ~467 px (bukan ~677).
         self.assertEqual(layout.guaranteed_table_px(768), layout.TABLE_MIN_PX)
+        self.assertEqual(layout.guaranteed_table_px(740), layout.TABLE_MIN_PX)
+        self.assertEqual(layout.guaranteed_table_px(739), layout.TABLE_MIN_PX)
         self.assertEqual(layout.guaranteed_table_px(700), layout.TABLE_MIN_PX)
         self.assertEqual(layout.guaranteed_table_px(680), layout.TABLE_MIN_PX)
-        self.assertEqual(layout.guaranteed_table_px(670), 83)
-        self.assertEqual(layout.guaranteed_table_px(640), 53)
+        self.assertEqual(layout.guaranteed_table_px(670), layout.TABLE_MIN_PX)
+        self.assertEqual(layout.guaranteed_table_px(640), layout.TABLE_MIN_PX)
+        self.assertEqual(layout.guaranteed_table_px(480), 13)
+        self.assertEqual(layout.guaranteed_table_px(467), 0)
         self.assertEqual(layout.guaranteed_table_px(300), 0)
         self.assertEqual(layout.guaranteed_table_px(1200), layout.TABLE_MIN_PX)
+
+    def test_guarantee_never_drops_when_the_window_grows(self):
+        previous = -1
+        for height in range(200, 1400):
+            now = layout.guaranteed_table_px(height)
+            self.assertGreaterEqual(now, previous, f"jaminan turun di {height}px")
+            previous = now
 
     def test_closed_loop_meets_the_guarantee_whatever_the_real_fixed_height_is(self):
         """Simulasi UI: tabel = tinggi jendela - K - panel - 298, K (elemen lain) tidak diketahui persis."""
         for fixed in range(140, 221, 5):                                  # CI: 164; rentang lebar sebagai uji ketahanan
             for window in range(640, 1201, 8):
+                if layout.side_panel_autohide(window):                    # v1.9.15.3: tanpa panel, tabel mendapat semuanya
+                    table = window - fixed - layout.EDITOR_CHROME_H
+                    self.assertGreaterEqual(table, layout.TABLE_MIN_PX, f"K={fixed}, jendela {window}: tabel {table}")
+                    continue
                 side = layout.side_panel_height(window)
                 for _ in range(4):                                        # maksimal 4 putaran seperti di aplikasi
                     table = window - fixed - side - layout.EDITOR_CHROME_H
@@ -190,6 +206,73 @@ class RebalanceTests(unittest.TestCase):
         self.assertIn("rebalanced_side_height", src)
         self.assertIn("def _rebalance_side", src)
         self.assertIn("self.editor.tree.winfo_height()", src)
+
+
+class SidePanelAutohideTests(unittest.TestCase):
+    """v1.9.15.3: panel preset disembunyikan di jendela pendek (log CI 1024x680: diminta 120, nyata 210, tabel 62 px)."""
+
+    def test_threshold_is_derived_from_measurements_with_a_margin(self):
+        measured = layout.CI_OUTSIDE_H + layout.OBSERVED_SIDE_MIN_H + layout.EDITOR_CHROME_MEASURED_H + layout.TABLE_MIN_PX
+        self.assertEqual((layout.OBSERVED_SIDE_MIN_H, layout.EDITOR_CHROME_MEASURED_H, measured), (210, 268, 732))
+        self.assertGreaterEqual(layout.SIDE_AUTOHIDE_H, measured, "di atas batas ini tabel 90 px aman dengan panel 210 px")
+        self.assertLessEqual(layout.SIDE_AUTOHIDE_H - measured, 10)
+        self.assertEqual(layout.SIDE_AUTOHIDE_H, 740)
+
+    def test_ci_sizes_that_passed_keep_the_panel(self):
+        for window in (749, 768):                                          # CI Windows / Linux: tabel 126 px dengan panel
+            self.assertFalse(layout.side_panel_autohide(window), window)
+        self.assertEqual(768 - layout.CI_OUTSIDE_H - 210 - layout.EDITOR_CHROME_MEASURED_H, 126)
+
+    def test_the_failing_ci_size_hides_the_panel(self):
+        self.assertTrue(layout.side_panel_autohide(680))
+        # Tanpa panel: editor = 680 - 164 (elemen lain; sedikit lebih kecil lagi karena padding panel hilang).
+        table = 680 - layout.CI_OUTSIDE_H - layout.EDITOR_CHROME_MEASURED_H
+        self.assertGreaterEqual(table, layout.TABLE_MIN_PX)
+
+    def test_boundary(self):
+        self.assertTrue(layout.side_panel_autohide(layout.SIDE_AUTOHIDE_H - 1))
+        self.assertFalse(layout.side_panel_autohide(layout.SIDE_AUTOHIDE_H))
+
+    def test_unmapped_window_never_hides(self):
+        for height in (-5, 0, 1):
+            self.assertFalse(layout.side_panel_autohide(height))
+
+    def test_dpi_scaling_uses_logical_pixels(self):
+        # 800 px fisik pada skala 125% = 640 px logis -> pendek; pada skala 100% = 800 -> cukup.
+        self.assertTrue(layout.side_panel_autohide(800, 1.25))
+        self.assertFalse(layout.side_panel_autohide(800, 1.0))
+        self.assertFalse(layout.side_panel_autohide(925, 1.25))            # 740 logis persis
+
+    def test_visibility_rules(self):
+        vis = layout.side_panel_visible
+        self.assertFalse(vis("landscape", 680))
+        self.assertTrue(vis("landscape", 900))
+        self.assertTrue(vis("portrait", 680), "portrait memakai panel 150 px yang di-scroll; tidak ikut disembunyikan")
+        self.assertTrue(vis(None, 680))
+        # pilihan pengguna selalu menang, di kedua arah
+        self.assertTrue(vis("landscape", 680, 1.0, True))
+        self.assertFalse(vis("landscape", 900, 1.0, False))
+        self.assertFalse(vis("portrait", 900, 1.0, False))
+
+    def test_unmapped_window_shows_the_panel_by_default(self):
+        self.assertTrue(layout.side_panel_visible("landscape", 0))
+
+    def test_workspace_is_wired_to_the_autohide(self):
+        src = (ROOT / "kaptionpro" / "ui" / "workspace.py").read_text(encoding="utf-8")
+        for needle in ("side_panel_visible(mode, h, self._widget_scaling(), self._side_user)",
+                       "self._side_user = None if want == auto else want",
+                       "self.btn_generate_top = small_button(",
+                       "def _sync_generate_shortcut",
+                       'if self._mode != "landscape" or not self._side_visible:'):
+            self.assertIn(needle, src)
+
+    def test_generate_stays_reachable_when_the_panel_is_hidden(self):
+        # Tombol Generate asli ada DI DALAM panel preset; jalan pintas di top bar memanggil fungsi yang sama.
+        src = (ROOT / "kaptionpro" / "ui" / "workspace.py").read_text(encoding="utf-8")
+        self.assertIn('small_button(top, "✨ Generate", self._generate_subtitles, 92)', src)
+        self.assertIn("self.btn_generate_top.grid_remove()", src)
+        self.assertIn("self.btn_generate_top.grid()", src)
+        self.assertIn('self.btn_generate_top.configure(state="disabled" if ai_busy else "normal"', src)
 
 
 class StartupGeometryEdgeCaseTests(unittest.TestCase):

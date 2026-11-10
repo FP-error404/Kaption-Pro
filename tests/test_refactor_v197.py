@@ -177,6 +177,7 @@ ws = object.__new__(W)                       # tanpa membangun widget: hanya log
 ws._jobs = JobTracker()
 ws.jobbar, ws.side = mock.MagicMock(), mock.MagicMock()
 ws.btn_mp4 = ws.btn_srt = ws.btn_ass = mock.MagicMock()
+ws.btn_generate_top = mock.MagicMock()      # v1.9.15.3: jalan pintas Generate di top bar ikut dinonaktifkan saat job AI
 ws.project, ws._pending_snapshot = None, False
 
 t1 = ws._begin_job("ai", "AI")
