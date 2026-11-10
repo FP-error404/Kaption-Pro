@@ -10,13 +10,13 @@ Semua pengujian berjalan otomatis di GitHub Actions saat kamu `push` / membuka p
 | `core-tests` | logika inti: penyimpanan, lock, recovery, FFmpeg (palsu), AI (palsu), shutdown | Linux + Windows, Python 3.10 / 3.12 |
 | `gui-smoke` | aplikasi ASLI dijalankan di layar virtual: start, project baru, edit + simpan, status job, dialog Panduan/Privasi, persetujuan privasi per penyedia, antrean UI responsif, tata letak 1366x768 & portrait, buka-ulang project, penutupan bersih | Linux (xvfb) + Windows |
 | `package` | membangun wheel + sdist, `twine check`, memasang wheel di venv bersih | Linux |
-| `lint` | Ruff (informasional, belum memblokir) | Linux |
+| `lint` | Ruff, **wajib** sejak v1.9.12: temuan menggagalkan workflow | Linux |
 
 ## Cara membaca hasil
 
 1. Buka tab **Actions** di repo, pilih run terbaru.
 2. Centang hijau = lolos. Silang merah = klik job yang gagal lalu buka langkah yang berwarna merah.
-3. Di bagian bawah halaman run ada **Artifacts**: `gui-artifacts-<os>-py<versi>` berisi
+3. Di bagian bawah halaman run ada **Artifacts**: `gui-artifacts-<os>-py<versi>` (os = `ubuntu-24.04` atau `windows-latest`) berisi
    screenshot (`01_welcome.png`, `03_workspace_with_subtitles.png`, `09_workspace_1366x768.png`, ...)
    dan `kaptionpro.log`. Dengan ini kamu bisa **melihat tampilan aplikasi** tanpa menjalankannya.
 
@@ -34,10 +34,12 @@ tetap perlu mata manusia. Tes GUI memastikan alur dan logika tidak rusak, bukan 
 | tab Actions kosong | `.github/workflows/tests.yml` tidak ada | buat lewat GitHub: Add file -> Create new file -> ketik `.github/workflows/tests.yml` |
 | `PermissionError: [WinError 32]` di job Windows | berkas masih terbuka saat folder sementara dihapus (Windows menolak; Linux tidak) | sejak v1.9.10 kebocoran serupa gagal di **Linux** dengan pesan `handle berkas BOCOR: <nama berkas>`; tutup resource-nya (`close()`/`unlock()`/`session_end()`) |
 | Folder `~/.kaptionpro/deleting/` berisi file `.tomb` | penghapusan project terputus (crash / daftar terkunci) | normal: dituntaskan otomatis saat KaptionPro dibuka; bila menetap, cek log baris `Pemulihan hapus ... belum tuntas` (berkas/folder backup terkunci) |
-| job `lint` merah di pull request | Ruff wajib sejak v1.9.12 | jalankan `pip install ruff && ruff check .` lokal dan perbaiki temuan |
+| Peringatan `Node.js 20 is deprecated` / `ubuntu-latest label will migrate` di Actions | action lama / label berjalan | sejak v1.9.14: checkout v6, setup-python v6, upload-artifact v7 dan Linux dipatok `ubuntu-24.04`; pindah ke `ubuntu-26.04` secara sengaja setelah tes hijau di sana |
+| Tabel subtitle hanya menampilkan header / tombol Export tertutup di layar kecil | panel preset terlalu tinggi, jendela awal lebih besar dari layar | sejak v1.9.14 tinggi panel mengikuti jendela dan jendela awal dibatasi layar; cek baris `[test_11 ...]` di log gui-smoke untuk ukuran nyata |
+| `test_11` gagal: `tinggi elemen lain ... menyimpang dari perkiraan` | tinggi top bar/export/job bar berubah (font, UI baru) | salin angka `elemen lain=` dari baris `[test_11 ...]` di log, perbarui komponen di `core/layout.py` dan `tests/test_ui_hardening_v1915.py` |
+| job `lint` merah | Ruff wajib sejak v1.9.12: gaya kode menyimpang menggagalkan workflow (temuan juga muncul sebagai anotasi di halaman run) | jalankan `pip install ruff && ruff check .` lokal dan perbaiki temuan |
 | Fitur AI/VLC nonaktif padahal paket sudah dipasang | paket gagal dimuat (bukan 'belum terpasang') | buka `~/.kaptionpro/kaptionpro.log`, cari baris `nonaktif: paket ... gagal dimuat` |
 | `AssertionError: 'landscape' != 'portrait'` di `test_09` (Windows) | runner CI tidak menerapkan ukuran jendela yang diminta | sejak v1.9.11 tes menunggu ukuran berubah dan memaksa mode portrait bila OS menolak; cek baris `[test_09 ...]` di log untuk ukuran nyata |
-| job `lint` merah | Ruff menemukan gaya kode yang menyimpang | informasional; temuan muncul sebagai anotasi di halaman run |
 
 Catatan: job `package` bisa hijau walau folder `ui` hilang, karena hanya mengimpor `core` dan `services`.
 
