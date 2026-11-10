@@ -518,15 +518,15 @@ class TimelineBar(ctk.CTkFrame):
 
         self.grid_columnconfigure(1, weight=1)
         self.ruler = tk.Canvas(self, height=20, bg=Theme.SURFACE, highlightthickness=0)
-        self.ruler.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=(10, 2))
+        self.ruler.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=(6, 1))
         self.canvases: dict[str, tk.Canvas] = {}
         for row, (key, label) in enumerate(self.TRACKS, start=1):
             ctk.CTkLabel(self, text=label, text_color=Theme.GOLD, width=96, anchor="w",
-                         font=Theme.font(11, "bold")).grid(row=row, column=0, padx=(12, 6), pady=3)
+                         font=Theme.font(11, "bold")).grid(row=row, column=0, padx=(12, 6), pady=2)
             cv = tk.Canvas(self, height=self.TRACK_HEIGHT, bg=Theme.SURFACE_2, highlightthickness=0)
-            cv.grid(row=row, column=1, sticky="ew", padx=(0, 12), pady=3)
+            cv.grid(row=row, column=1, sticky="ew", padx=(0, 12), pady=2)
             self.canvases[key] = cv
-        ctk.CTkFrame(self, height=6, fg_color="transparent").grid(row=4, column=0)
+        ctk.CTkFrame(self, height=2, fg_color="transparent").grid(row=4, column=0)
 
         for cv in (self.ruler, *self.canvases.values()):
             cv.bind("<Button-1>", self._on_click)
@@ -731,8 +731,15 @@ class WorkspaceScreen(ctk.CTkFrame):
             on_volume=self._on_volume,
             on_player_error=self._on_player_error,
         )
-        self.side = SidePanel(self, self._on_preset, self._on_style, self._generate_subtitles,
+        # Panel preset dibungkus wadah berukuran TETAP: CTkScrollableFrame tidak mau lebih pendek dari ~210 px karena
+        # scrollbar-nya meminta 200 px; wadah (grid_propagate(False)) memaksa tinggi yang dihitung core/layout.py.
+        self.side_box = tk.Frame(self, bg=Theme.BG, highlightthickness=0, bd=0, width=500, height=250)
+        self.side_box.grid_propagate(False)
+        self.side_box.grid_rowconfigure(0, weight=1)
+        self.side_box.grid_columnconfigure(0, weight=1)
+        self.side = SidePanel(self.side_box, self._on_preset, self._on_style, self._generate_subtitles,
                               self._open_style_dialog, self._on_model_changed, self._on_translator_changed)
+        self.side.grid(row=0, column=0, sticky="nsew")
         self.timeline = TimelineBar(self, on_seek_time=lambda t: self.seek_time(t, "timeline"))
         self.editor = SubtitleEditorPanel(self, on_changed=self._on_segments_changed,
                                           on_select=lambda seg: self.seek_time(seg.start, "editor"),
@@ -775,6 +782,10 @@ class WorkspaceScreen(ctk.CTkFrame):
         except Exception:  # noqa: BLE001
             return 1.0
 
+    def _set_side_height(self, logical: int) -> None:
+        """Tinggi panel preset (px logis) -> tinggi wadah tetap (px fisik)."""
+        self.side_box.configure(height=max(1, int(round(logical * self._widget_scaling()))))
+
     def _fit_side_height(self) -> None:
         """
         Landscape: tinggi panel preset mengikuti tinggi jendela supaya tabel subtitle & form editor tidak terjepit
@@ -790,7 +801,7 @@ class WorkspaceScreen(ctk.CTkFrame):
             self._rebalance_passes = 0
             if estimate != self._side_h:
                 self._side_h = estimate
-                self.side.configure(height=estimate)
+                self._set_side_height(estimate)
         self._schedule_rebalance()
 
     def _schedule_rebalance(self) -> None:
@@ -810,7 +821,7 @@ class WorkspaceScreen(ctk.CTkFrame):
         target = rebalanced_side_height(self._side_h or 0, table_px, self._widget_scaling())
         if self._side_h is not None and target != self._side_h:
             self._side_h = target
-            self.side.configure(height=target)
+            self._set_side_height(target)
             self._rebalance_passes += 1
             if self._rebalance_passes < 4:                       # cukup beberapa putaran; hindari loop tak berujung
                 self._schedule_rebalance()
@@ -819,7 +830,7 @@ class WorkspaceScreen(ctk.CTkFrame):
         if mode == self._mode:
             return
         self._mode = mode
-        for widget in (self.video, self.side, self.timeline, self.editor, self.export_bar, self.jobbar):
+        for widget in (self.video, self.side_box, self.timeline, self.editor, self.export_bar, self.jobbar):
             widget.grid_forget()
         for r in range(8):
             self.grid_rowconfigure(r, weight=0, minsize=0)
@@ -832,7 +843,7 @@ class WorkspaceScreen(ctk.CTkFrame):
             self._fit_side_height()
             self.video.grid(row=1, column=0, rowspan=2, sticky="nsew", padx=(12, 6), pady=(10, 6))
             if self._side_visible:
-                self.side.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=(10, 6))
+                self.side_box.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=(10, 6))
                 self.editor.grid(row=2, column=1, rowspan=2, sticky="nsew", padx=(6, 12), pady=6)
             else:           # panel presets disembunyikan: editor memakai seluruh kolom kanan
                 self.editor.grid(row=1, column=1, rowspan=3, sticky="nsew", padx=(6, 12), pady=(10, 6))
@@ -846,9 +857,9 @@ class WorkspaceScreen(ctk.CTkFrame):
             self.grid_rowconfigure(1, weight=3, minsize=140)
             self.grid_rowconfigure(4, weight=4, minsize=260)
             self._side_h = self._side_est = None
-            self.side.configure(height=150)
-            for row, widget in enumerate((self.video, self.side, self.timeline, self.editor), start=1):
-                if widget is self.side and not self._side_visible:
+            self._set_side_height(150)
+            for row, widget in enumerate((self.video, self.side_box, self.timeline, self.editor), start=1):
+                if widget is self.side_box and not self._side_visible:
                     continue
                 widget.grid(row=row, column=0, columnspan=2, sticky="nsew" if row in (1, 4) else "ew",
                             padx=12, pady=5)

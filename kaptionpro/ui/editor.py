@@ -30,6 +30,10 @@ class SubtitleEditorPanel(ctk.CTkFrame):
     BIG = 1500                 # di atas ini daftar diisi bertahap
     CHUNK = 400
     TIME_EPS = 0.0006          # toleransi pembulatan milidetik (entri waktu hanya 3 desimal)
+    # Menu "Alat" di toolbar (label, nama method): aksi yang jarang dipakai dikelompokkan agar toolbar cukup 1 baris.
+    TOOLS_MENU = (("📂 Import subtitle…", "_import_srt"), ("⏱ Shift semua…", "_shift_all"),
+                  ("🧰 Edit massal (Bulk)…", "_bulk_edit"), ("✂ Split baris", "_split_selected"),
+                  ("🔗 Merge baris", "_merge_selected"))
     FILTERS = {"all": "Semua", "issues": "Bermasalah", "overlap": "Overlap", "short": "Pendek",
                "long": "Panjang", "blocking": "Kosong / waktu salah"}
 
@@ -85,16 +89,27 @@ class SubtitleEditorPanel(ctk.CTkFrame):
                           text_color=Theme.TEXT, font=Theme.font(11), command=self._on_filter).grid(row=0, column=2, padx=4)
         small_button(bar, "✕", self._clear_search, 30).grid(row=0, column=3)
 
-        # Toolbar: 5 + 4 tombol
+        # Toolbar 1 baris: aksi yang sering dipakai (Undo, Redo, Cari/Ganti, Auto-Fix) + menu "Alat" untuk sisanya.
+        # (v1.9.15.2: dulu 2 baris x 9 tombol; baris ke-2 dihemat agar tabel subtitle mendapat ~30 px lebih tinggi.)
         tools = ctk.CTkFrame(self, fg_color="transparent")
         tools.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 2))
-        buttons = (("📂 Import", self._import_srt, 76), ("⏱ Shift", self._shift_all, 64),
-                   ("🔍 Cari/Ganti", self._search_replace, 100), ("🧰 Bulk", self._bulk_edit, 64),
-                   ("✔ Auto-Fix", self._auto_fix, 82),
-                   ("↶ Undo", self.undo, 62), ("↷ Redo", self.redo, 62),
-                   ("✂ Split", self._split_selected, 66), ("🔗 Merge", self._merge_selected, 70))
+        buttons = (("↶ Undo", self.undo, 62), ("↷ Redo", self.redo, 62),
+                   ("🔍 Cari/Ganti", self._search_replace, 100), ("✔ Auto-Fix", self._auto_fix, 82))
         for i, (text, command, width) in enumerate(buttons):
-            small_button(tools, text, command, width).grid(row=i // 5, column=i % 5, padx=2, pady=2, sticky="w")
+            small_button(tools, text, command, width).grid(row=0, column=i, padx=2, pady=2, sticky="w")
+        self._tools_menu = tk.Menu(self, tearoff=0, bg=Theme.SURFACE_2, fg=Theme.TEXT, bd=0,
+                                   activebackground=Theme.GOLD, activeforeground="#121212")
+        for label, command in self.TOOLS_MENU:
+            self._tools_menu.add_command(label=label, command=getattr(self, command))
+        self._tools_button = small_button(tools, "🛠 Alat ▾", self._open_tools_menu, 80)
+        self._tools_button.grid(row=0, column=len(buttons), padx=2, pady=2, sticky="w")
+
+    def _open_tools_menu(self) -> None:
+        button = self._tools_button
+        try:
+            self._tools_menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
+        finally:
+            self._tools_menu.grab_release()
 
     def _build_tree(self) -> None:
         style = ttk.Style(self)
