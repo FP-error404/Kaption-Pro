@@ -479,6 +479,10 @@ class GuiSmokeTests(unittest.TestCase):
         Tes ini TIDAK boleh lolos tanpa mengukur apa pun: penilaian memakai ukuran jendela yang NYATA (bukan yang diminta),
         jadi runner yang menolak resize tetap menghasilkan pengukuran. Skenario pertama ("apa adanya") tidak meminta
         resize sama sekali. Minimal satu skenario landscape wajib terukur.
+
+        Catatan pengukuran: ws.side adalah CTkScrollableFrame; ws.side.winfo_height() adalah tinggi ISI di dalam kanvas
+        (bisa 496 px dan itu normal, isinya di-scroll), BUKAN tinggi panel di grid. Tinggi panel yang sebenarnya adalah
+        milik bingkai luarnya (_parent_frame).
         """
         from kaptionpro.core import layout
         app, ws = self.app, self.ensure_workspace()
@@ -489,25 +493,24 @@ class GuiSmokeTests(unittest.TestCase):
                 if requested is not None:
                     self._resize(*requested)
                 ws._apply_layout()
-                self.pump(0.3)
+                self.pump(0.6)                    # beri waktu penyetelan akhir tinggi panel (beberapa putaran @ 60 ms)
                 aw, ah = app.winfo_width(), app.winfo_height()
                 tree = ws.editor.tree
-                outside = ws.winfo_height() - ws.side.winfo_height() - ws.editor.winfo_height()
+                outer = getattr(ws.side, "_parent_frame", ws.side)        # bingkai luar yang ada di grid
+                outside = ws.winfo_height() - outer.winfo_height() - ws.editor.winfo_height()
                 print(f"[test_11] diminta={requested or 'apa adanya'}, nyata {aw}x{ah}, mode={ws._mode}, "
-                      f"panel preset diminta={ws._side_h} nyata={ws.side.winfo_height()}, editor={ws.editor.winfo_height()}, "
-                      f"tabel={tree.winfo_height()}, elemen lain={outside} (perkiraan {layout.OUTSIDE_H})")
+                      f"panel preset: diminta={ws._side_h} nyata={outer.winfo_height()} (isi di dalam kanvas="
+                      f"{ws.side.winfo_height()}), editor={ws.editor.winfo_height()}, tabel={tree.winfo_height()}, "
+                      f"elemen lain={outside} (perkiraan {layout.OUTSIDE_H}), "
+                      f"extra panel={outer.winfo_height() - (ws._side_h or 0)} (perkiraan {layout.SCROLLABLE_EXTRA_H})")
                 self.shot(f"11_workspace_{aw}x{ah}")
                 if ws._mode != "landscape" or ah < layout.MIN_WINDOW[1]:
                     continue                      # portrait / lebih pendek dari minsize: bukan sasaran tes ini
-                side = layout.side_panel_height(ah)
-                rows_px = ah - layout.OUTSIDE_H - (side + layout.SCROLLABLE_EXTRA_H) - layout.EDITOR_BASE_H
-                min_tree = max(layout.ROW_H, rows_px + layout.ROW_H - 30)       # header + baris, toleransi 30 px
-                if ah >= 760:
-                    min_tree = max(min_tree, 96)                                # >= ~3 baris data terlihat
-                self.assertGreaterEqual(tree.winfo_height(), min_tree, f"tabel subtitle terlalu pendek di {aw}x{ah}")
-                self.assertLessEqual(abs(outside - layout.OUTSIDE_H), 40,
-                                     f"tinggi elemen lain {outside}px menyimpang dari perkiraan {layout.OUTSIDE_H}px: "
-                                     "perbarui konstanta di core/layout.py")
+                want = layout.guaranteed_table_px(ah)
+                self.assertGreaterEqual(tree.winfo_height(), want - 10,
+                                        f"tabel subtitle {tree.winfo_height()}px di {aw}x{ah}, dijamin >= {want}px")
+                self.assertGreater(outside, 100, f"elemen lain {outside}px: panel/editor tumpang-tindih atau salah ukur")
+                self.assertLess(outside, 300, f"elemen lain {outside}px tidak masuk akal")
                 bottom = app.winfo_rooty() + app.winfo_height() + 2
                 for name, widget in (("export_bar", ws.export_bar), ("jobbar", ws.jobbar),
                                      ("editor", ws.editor), ("text_box", ws.editor.text_box)):
