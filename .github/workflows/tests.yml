@@ -1,19 +1,26 @@
 name: tests
 
+# Catatan versi (v1.9.14):
+# - actions/* memakai rilis Node 24 (checkout v6, setup-python v6, upload-artifact v7); Node 20 sudah usang.
+# - Linux dipatok ke ubuntu-24.04: label ubuntu-latest sedang berpindah ke Ubuntu 26.04 (19 Okt - 19 Nov 2026).
+#   Pindah ke ubuntu-26.04 secara sengaja setelah tes hijau di sana, bukan lewat label yang bergerak sendiri.
+
 on:
   push:
   pull_request:
-  workflow_dispatch:
+  workflow_dispatch:        # tombol "Run workflow" di tab Actions (jalankan manual tanpa commit)
 
 jobs:
   core-tests:
-    timeout-minutes: 15
+    # Tes core berjalan di Linux DAN Windows (jalur kunci msvcrt hanya teruji di Windows).
+    # Sengaja TANPA pip install customtkinter: membuktikan core tidak bergantung pada GUI.
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, windows-latest]
         python: ["3.10", "3.12"]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15            # worker/tes yang macet tidak boleh menahan runner (default GitHub: 6 jam)
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -23,8 +30,9 @@ jobs:
         run: python -m unittest discover -s tests -v
 
   lint:
-    timeout-minutes: 10
+    # WAJIB (sejak v1.9.12): Ruff sudah bersih di run #20 dan #21, jadi pelanggaran baru menggagalkan workflow.
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -36,6 +44,7 @@ jobs:
           ruff check . --output-format=github
 
   package:
+    # Pastikan paket benar-benar bisa dibangun dan metadatanya valid (tanpa mengunggah apa pun).
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -47,13 +56,15 @@ jobs:
           pip install build twine
           python -m build
           twine check dist/*
-      - name: Install wheel di venv bersih lalu import inti
+      - name: Install wheel in clean venv (tanpa fitur opsional) lalu import inti
         run: |
           python -m venv /tmp/clean
           /tmp/clean/bin/pip install dist/*.whl
           /tmp/clean/bin/python -c "import kaptionpro, kaptionpro.core.storage, kaptionpro.services.ai_service, kaptionpro.services.ffmpeg_service; print(kaptionpro.__version__)"
 
   gui-smoke:
+    # Menjalankan aplikasi ASLI (CustomTkinter) di Linux (layar virtual xvfb) dan Windows, lalu memeriksa alur utama.
+    # Screenshot + log diunggah sebagai artefak: lihat tab Actions -> pilih run -> bagian "Artifacts".
     name: gui-smoke (${{ matrix.os }}, py${{ matrix.python }})
     strategy:
       fail-fast: false
@@ -63,19 +74,21 @@ jobs:
           - { os: ubuntu-24.04, python: "3.12" }
           - { os: windows-latest, python: "3.12" }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 15            # dialog yang tak sengaja menggantung tidak boleh menahan runner berjam-jam
     env:
-      KAPTION_REQUIRE_GUI: "1"
+      KAPTION_REQUIRE_GUI: "1"     # tanpa GUI = GAGAL (bukan dilewati), supaya CI tidak diam-diam hijau
       KAPTION_GUI_ARTIFACTS: gui-artifacts
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
+      - name: Cek kelengkapan repo (folder/berkas yang belum ter-upload)
+        run: python -m unittest tests.test_00_repo_structure -v
       - name: Paket sistem (Linux) - layar virtual + Tk
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb tk
-      - name: Pasang CustomTkinter + Pillow
+      - name: Pasang CustomTkinter + Pillow (untuk screenshot)
         run: pip install "customtkinter>=5.2,<6" pillow
       - name: Info Tk
         run: python -c "import tkinter, customtkinter; print('Tk', tkinter.TkVersion, '| customtkinter', customtkinter.__version__)"
