@@ -27,7 +27,7 @@ from ..config import (
 )
 from ..core.storage import BackupInfo
 from ..core.jobs import JobTracker
-from ..core.layout import rebalanced_side_height, side_panel_height
+from ..core.layout import rebalanced_side_height, side_panel_height, side_panel_visible
 from ..core.privacy import ACK_KEY, is_acknowledged, with_acknowledged
 from ..core.utils import CancelledError, fmt_clock, normalize_hex, safe_filename
 from ..models import (
@@ -694,7 +694,8 @@ class WorkspaceScreen(ctk.CTkFrame):
         self._pending_snapshot = False      # snapshot menunggu untuk dihapus setelah flush sukses
         self._last_vlc_digest = ""          # hash ASS terakhir yang BENAR-BENAR diterima VLC
         self._job_thread: threading.Thread | None = None
-        self._side_visible = True
+        self._side_visible = True            # keadaan EFEKTIF panel preset (otomatis atau pilihan pengguna)
+        self._side_user: bool | None = None  # pilihan pengguna (tombol Panel); None = otomatis (jendela pendek -> sembunyi)
         self._vol_save_id = None
         self._save_failed = False
         self._discard_pending = False          # True sesaat setelah user memilih membuang perubahan (bisa dibatalkan)
@@ -720,6 +721,11 @@ class WorkspaceScreen(ctk.CTkFrame):
         small_button(top, "▣ Panel", self._toggle_side, 70).grid(row=0, column=5, padx=3)
         small_button(top, "🎯 Subs VLC", lambda: self._reload_vlc_subs(force=True), 96).grid(row=0, column=6, padx=3)
         small_button(top, "📖 Panduan", app.show_guide, 90).grid(row=0, column=7, padx=(3, 10))
+        # Jalan pintas Generate: tombol aslinya ada DI DALAM panel preset, jadi saat panel disembunyikan (jendela pendek)
+        # aksi utama ini tetap harus terjangkau. Hanya tampil ketika panel tersembunyi (_sync_generate_shortcut).
+        self.btn_generate_top = small_button(top, "✨ Generate", self._generate_subtitles, 92)
+        self.btn_generate_top.grid(row=0, column=8, padx=(0, 10))
+        self.btn_generate_top.grid_remove()
 
         # Komponen utama
         self.video = VideoPreviewPanel(
@@ -773,7 +779,12 @@ class WorkspaceScreen(ctk.CTkFrame):
         w, h = self.winfo_width(), self.winfo_height()
         if w <= 1:
             return
-        self._set_mode("portrait" if (w < self.PORTRAIT_BREAKPOINT or w < h) else "landscape")
+        mode = "portrait" if (w < self.PORTRAIT_BREAKPOINT or w < h) else "landscape"
+        want = side_panel_visible(mode, h, self._widget_scaling(), self._side_user)
+        if want != self._side_visible:                           # jendela memendek/memanjang melewati batas autohide
+            self._side_visible = want
+            self._mode = None                                    # paksa susun ulang grid
+        self._set_mode(mode)
         self._fit_side_height()
 
     def _widget_scaling(self) -> float:
@@ -793,8 +804,8 @@ class WorkspaceScreen(ctk.CTkFrame):
         Dua tahap: (1) perkiraan dari core/layout.py, (2) penyetelan akhir dari ukuran tabel yang NYATA
         (_rebalance_side), karena perkiraan konstanta pernah meleset puluhan piksel.
         """
-        if self._mode != "landscape":
-            return
+        if self._mode != "landscape" or not self._side_visible:
+            return                                               # panel tersembunyi: tidak ada yang perlu disetel
         estimate = side_panel_height(self.winfo_height(), self._widget_scaling())
         if estimate != self._side_est:                           # jendela berubah tinggi: hitung ulang dari awal
             self._side_est = estimate
@@ -812,7 +823,7 @@ class WorkspaceScreen(ctk.CTkFrame):
         """Ukur tinggi tabel subtitle yang sebenarnya; bila di bawah TABLE_MIN_PX, kecilkan panel preset sebesar kekurangannya."""
         self._rebalance_id = None
         try:
-            if self._mode != "landscape" or not self.winfo_exists():
+            if self._mode != "landscape" or not self._side_visible or not self.winfo_exists():
                 return
             self.update_idletasks()
             table_px = self.editor.tree.winfo_height()
@@ -868,6 +879,14 @@ class WorkspaceScreen(ctk.CTkFrame):
             labels = ("⬇ MP4", "⬇ SRT", "⬇ ASS")
         for btn, text in zip((self.btn_mp4, self.btn_srt, self.btn_ass), labels):
             btn.configure(text=text)
+        self._sync_generate_shortcut()
+
+    def _sync_generate_shortcut(self) -> None:
+        """Tombol Generate di top bar tampil hanya saat panel preset (tempat tombol aslinya) tersembunyi."""
+        if self._side_visible:
+            self.btn_generate_top.grid_remove()
+        else:
+            self.btn_generate_top.grid()
 
     # ---------- Project lifecycle ----------
     def load_project(self, project: Project) -> bool:
@@ -1116,8 +1135,14 @@ class WorkspaceScreen(ctk.CTkFrame):
         self.set_status(f"✓ Backup {info.saved_at} dipulihkan ({len(res.segments)} baris)")
 
     def _toggle_side(self) -> None:
-        """Sembunyikan/tampilkan panel presets (layar pendek: editor jadi lebih lega)."""
-        self._side_visible = not self._side_visible
+        """
+        Sembunyikan/tampilkan panel presets (layar pendek: editor jadi lebih lega). Pilihan pengguna menang atas
+        otomatis; bila pilihannya sama dengan yang akan dipilih otomatis, kembali mengikuti otomatis (None).
+        """
+        want = not self._side_visible
+        auto = side_panel_visible(self._mode, self.winfo_height(), self._widget_scaling(), None)
+        self._side_user = None if want == auto else want
+        self._side_visible = want
         self._mode = None                      # paksa susun ulang layout
         self._apply_layout()
         if self._mode is None:
@@ -1490,7 +1515,10 @@ class WorkspaceScreen(ctk.CTkFrame):
             self._set_controls_busy(False)
 
     def _set_controls_busy(self, busy: bool) -> None:
-        self.side.set_busy(busy and self._job_kind == "ai")
+        ai_busy = busy and self._job_kind == "ai"
+        self.side.set_busy(ai_busy)
+        self.btn_generate_top.configure(state="disabled" if ai_busy else "normal",
+                                        text="⏳ Working..." if ai_busy else "✨ Generate")
         state = "disabled" if busy else "normal"
         for btn in (self.btn_mp4, self.btn_srt, self.btn_ass):
             btn.configure(state=state)
