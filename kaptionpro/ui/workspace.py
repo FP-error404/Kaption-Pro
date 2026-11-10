@@ -27,7 +27,7 @@ from ..config import (
 )
 from ..core.storage import BackupInfo
 from ..core.jobs import JobTracker
-from ..core.layout import side_panel_height
+from ..core.layout import rebalanced_side_height, side_panel_height
 from ..core.privacy import ACK_KEY, is_acknowledged, with_acknowledged
 from ..core.utils import CancelledError, fmt_clock, normalize_hex, safe_filename
 from ..models import (
@@ -684,6 +684,9 @@ class WorkspaceScreen(ctk.CTkFrame):
         self.duration = 60.0
         self._mode: str | None = None
         self._side_h: int | None = None      # tinggi panel preset yang sedang diterapkan (mode landscape)
+        self._side_est: int | None = None    # perkiraan awal terakhir dari side_panel_height (sebelum penyetelan akhir)
+        self._rebalance_id = None
+        self._rebalance_passes = 0
         self._after_id = None
         self._autosave_id = None
         self._vlc_sub_id = None
@@ -766,19 +769,51 @@ class WorkspaceScreen(ctk.CTkFrame):
         self._set_mode("portrait" if (w < self.PORTRAIT_BREAKPOINT or w < h) else "landscape")
         self._fit_side_height()
 
+    def _widget_scaling(self) -> float:
+        try:
+            return float(self._get_widget_scaling())             # API privat CTk; gagal -> skala 1
+        except Exception:  # noqa: BLE001
+            return 1.0
+
     def _fit_side_height(self) -> None:
-        """Landscape: tinggi panel preset mengikuti tinggi jendela supaya tabel subtitle & form editor tidak terjepit
-        (dulu tetap 250 px sehingga di layar 1366x768 tabel menyusut jadi hanya baris header)."""
+        """
+        Landscape: tinggi panel preset mengikuti tinggi jendela supaya tabel subtitle & form editor tidak terjepit
+        (dulu tetap 250 px sehingga di layar 1366x768 tabel menyusut jadi hanya baris header).
+        Dua tahap: (1) perkiraan dari core/layout.py, (2) penyetelan akhir dari ukuran tabel yang NYATA
+        (_rebalance_side), karena perkiraan konstanta pernah meleset puluhan piksel.
+        """
         if self._mode != "landscape":
             return
+        estimate = side_panel_height(self.winfo_height(), self._widget_scaling())
+        if estimate != self._side_est:                           # jendela berubah tinggi: hitung ulang dari awal
+            self._side_est = estimate
+            self._rebalance_passes = 0
+            if estimate != self._side_h:
+                self._side_h = estimate
+                self.side.configure(height=estimate)
+        self._schedule_rebalance()
+
+    def _schedule_rebalance(self) -> None:
+        if self._rebalance_id is None:
+            self._rebalance_id = self.after(60, self._rebalance_side)
+
+    def _rebalance_side(self) -> None:
+        """Ukur tinggi tabel subtitle yang sebenarnya; bila di bawah TABLE_MIN_PX, kecilkan panel preset sebesar kekurangannya."""
+        self._rebalance_id = None
         try:
-            scaling = float(self._get_widget_scaling())          # API privat CTk; gagal -> skala 1
-        except Exception:  # noqa: BLE001
-            scaling = 1.0
-        height = side_panel_height(self.winfo_height(), scaling)
-        if height != self._side_h:
-            self._side_h = height
-            self.side.configure(height=height)
+            if self._mode != "landscape" or not self.winfo_exists():
+                return
+            self.update_idletasks()
+            table_px = self.editor.tree.winfo_height()
+        except tk.TclError:                                      # widget sudah dihancurkan (aplikasi ditutup)
+            return
+        target = rebalanced_side_height(self._side_h or 0, table_px, self._widget_scaling())
+        if self._side_h is not None and target != self._side_h:
+            self._side_h = target
+            self.side.configure(height=target)
+            self._rebalance_passes += 1
+            if self._rebalance_passes < 4:                       # cukup beberapa putaran; hindari loop tak berujung
+                self._schedule_rebalance()
 
     def _set_mode(self, mode: str) -> None:
         if mode == self._mode:
@@ -793,7 +828,7 @@ class WorkspaceScreen(ctk.CTkFrame):
             self.grid_columnconfigure(0, weight=1, minsize=380)
             self.grid_columnconfigure(1, weight=0, minsize=500)
             self.grid_rowconfigure(2, weight=1)
-            self._side_h = None                # paksa hitung ulang untuk ukuran jendela saat ini
+            self._side_h = self._side_est = None   # paksa hitung ulang untuk ukuran jendela saat ini
             self._fit_side_height()
             self.video.grid(row=1, column=0, rowspan=2, sticky="nsew", padx=(12, 6), pady=(10, 6))
             if self._side_visible:
@@ -810,7 +845,7 @@ class WorkspaceScreen(ctk.CTkFrame):
             self.grid_columnconfigure(1, weight=0, minsize=0)
             self.grid_rowconfigure(1, weight=3, minsize=140)
             self.grid_rowconfigure(4, weight=4, minsize=260)
-            self._side_h = None
+            self._side_h = self._side_est = None
             self.side.configure(height=150)
             for row, widget in enumerate((self.video, self.side, self.timeline, self.editor), start=1):
                 if widget is self.side and not self._side_visible:
