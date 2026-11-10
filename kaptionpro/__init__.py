@@ -96,6 +96,17 @@ Perubahan v1.8 (audit keamanan data v1.7)
  * File partial FFmpeg bernama unik per proses (pid + UUID): export bersamaan ke tujuan yang sama
    tidak saling menghapus; export kedua ditolak dengan pesan jelas; partial basi milik proses mati dibersihkan.
 
+(Perubahan v1.9.15.2 - Panel preset kini benar-benar mengikuti tinggi yang dihitung; tabel subtitle lebih lega:
+ * Akar masalah: CTkScrollableFrame tidak mau lebih pendek dari ~210 px (scrollbar vertikal CustomTkinter meminta 200 px
+   + padding), jadi configure(height=165/146) tidak berpengaruh. Bukti dari log CI v1.9.15: dengan panel = 210 px,
+   elemen lain di Linux (768 - 210 - 394) dan Windows (749 - 210 - 375) sama-sama 164 px.
+ * Panel preset kini dibungkus wadah berukuran tetap (WorkspaceScreen.side_box, grid_propagate(False)); tinggi dari
+   core/layout.py dipatuhi persis, panel tetap bisa di-scroll. Konstanta diselaraskan dengan ukuran nyata
+   (CHROME_H 557, target tabel 90 px); penyetelan akhir tidak lagi memaksa panel di bawah 120 px.
+ * Toolbar editor jadi 1 baris: Undo, Redo, Cari/Ganti, Auto-Fix + menu "Alat" (Import, Shift, Bulk, Split, Merge);
+   hemat ~30 px tinggi. Timeline: padding track dikurangi (tinggi ~160 -> ~145 px; menambah ruang video, bukan tabel).
+ * Video preview, font, dan tombol Export tidak diubah.)
+
 (Perubahan v1.9.15.1 - Perbaikan test_11 (gui-smoke gagal di Linux dan Windows):
  * Penyebab 1 (salah ukur): ws.side adalah CTkScrollableFrame, jadi ws.side.winfo_height() = tinggi ISI di dalam
    kanvas (496 px, di-scroll), bukan tinggi panel di grid. Tes kini mengukur bingkai luar (_parent_frame) dan mencetak
@@ -215,4 +226,4 @@ Perubahan v1.8 (audit keamanan data v1.7)
 output, backup berversi, lock atomik, VLC volume/frame-step, editor cari/filter/undo-redo/bulk.)
 """
 
-__version__ = "1.9.15.1"
+__version__ = "1.9.15.2"
