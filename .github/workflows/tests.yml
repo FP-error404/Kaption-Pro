@@ -11,12 +11,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
         python: ["3.10", "3.12"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: Jalankan tes
@@ -24,22 +24,22 @@ jobs:
 
   lint:
     timeout-minutes: 10
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Ruff
         run: |
           pip install ruff
-          ruff check .
+          ruff check . --output-format=github
 
   package:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Build wheel + sdist
@@ -59,8 +59,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, python: "3.10" }
-          - { os: ubuntu-latest, python: "3.12" }
+          - { os: ubuntu-24.04, python: "3.10" }
+          - { os: ubuntu-24.04, python: "3.12" }
           - { os: windows-latest, python: "3.12" }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
@@ -68,8 +68,8 @@ jobs:
       KAPTION_REQUIRE_GUI: "1"
       KAPTION_GUI_ARTIFACTS: gui-artifacts
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: Paket sistem (Linux) - layar virtual + Tk
@@ -87,7 +87,7 @@ jobs:
         run: python -m unittest tests.test_gui_smoke -v
       - name: Unggah screenshot + log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gui-artifacts-${{ matrix.os }}-py${{ matrix.python }}
           path: gui-artifacts/
