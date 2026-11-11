@@ -7,10 +7,13 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
 from ..config import Theme, ctk
+from ..core import quality_fix as qf
+from ..core.quality_flow import StalePlanError
 from ..core.utils import srt_time
 from ..models import SubtitleIO, SubtitleSegment, Word, retime_words, sanitize_word_list
 from .components import small_button
 from .dialogs import BulkEditDialog, SearchReplaceDialog, ask_text
+from .quality_dialog import QualityReportDialog
 
 
 class SubtitleEditorPanel(ctk.CTkFrame):
@@ -31,7 +34,8 @@ class SubtitleEditorPanel(ctk.CTkFrame):
     CHUNK = 400
     TIME_EPS = 0.0006          # toleransi pembulatan milidetik (entri waktu hanya 3 desimal)
     # Menu "Alat" di toolbar (label, nama method): aksi yang jarang dipakai dikelompokkan agar toolbar cukup 1 baris.
-    TOOLS_MENU = (("📂 Import subtitle…", "_import_srt"), ("⏱ Shift semua…", "_shift_all"),
+    TOOLS_MENU = (("📋 Laporan kualitas…", "_open_quality_report"),
+                  ("📂 Import subtitle…", "_import_srt"), ("⏱ Shift semua…", "_shift_all"),
                   ("🧰 Edit massal (Bulk)…", "_bulk_edit"), ("✂ Split baris", "_split_selected"),
                   ("🔗 Merge baris", "_merge_selected"))
     FILTERS = {"all": "Semua", "issues": "Bermasalah", "overlap": "Overlap", "short": "Pendek",
@@ -56,6 +60,7 @@ class SubtitleEditorPanel(ctk.CTkFrame):
         self._search_id = None
         self._fill_gen = 0
         self.filter_key = "all"
+        self._quality_dialog = None                          # dialog Laporan Kualitas yang sedang terbuka (satu saja)
 
         self.grid_rowconfigure(3, weight=1, minsize=80)      # tabel subtitle tidak boleh menyusut jadi hanya header
         self.grid_columnconfigure(0, weight=1)
@@ -713,3 +718,54 @@ class SubtitleEditorPanel(ctk.CTkFrame):
             return
         self.before_op("before-autofix")
         self.replace_all(fixed)
+
+    # ------------------------------------------------------------------ laporan kualitas (v1.9.18)
+    def _open_quality_report(self) -> None:
+        """Buka dialog Laporan Kualitas (daftar error/peringatan per baris + Perbaiki otomatis yang aman)."""
+        if not self.segments:
+            messagebox.showinfo("KaptionPro", "Belum ada subtitle untuk diperiksa.")
+            return
+        if self._form_dirty() and not self._apply():          # edit belum disimpan ikut diperiksa; form tak valid -> berhenti
+            return
+        dialog = self._quality_dialog
+        try:
+            alive = dialog is not None and bool(dialog.winfo_exists())
+        except tk.TclError:
+            alive = False
+        if alive:
+            dialog.lift()
+            return
+        self._quality_dialog = QualityReportDialog(self, get_segments=lambda: self.segments,
+                                                   apply_plan=self._apply_quality_plan, undo=self.undo,
+                                                   jump_to=self._jump_to_index)
+
+    def _jump_to_index(self, index: int) -> None:
+        if 0 <= index < len(self.segments):
+            seg = self.segments[index]
+            self.select_segment(seg)
+            self.on_select(seg)
+
+    def _segments_from_plan(self, plan: qf.FixPlan) -> list[SubtitleSegment]:
+        """Daftar baru dari rencana: baris tak berubah disalin apa adanya; word timestamp hanya dibuang bila WAKTU berubah."""
+        by_index = {change.index: change for change in plan.changes}
+        out: list[SubtitleSegment] = []
+        for i, seg in enumerate(self.segments):
+            change = by_index.get(i)
+            keep_words = change is None or not change.timing_changed
+            words = [Word(w.start, w.end, w.text) for w in seg.words] if keep_words else []
+            if change is None:
+                out.append(SubtitleSegment(seg.start, seg.end, seg.text, words))
+            else:
+                out.append(SubtitleSegment(float(change.after.start), float(change.after.end), change.after.text, words))
+        return out
+
+    def _apply_quality_plan(self, plan: qf.FixPlan) -> None:
+        """
+        Dipanggil QualityFlow.apply SETELAH pratinjau dan konfirmasi pengguna: backup lalu SATU langkah Undo
+        (replace_all mendorong satu snapshot). Menolak rencana basi sebagai pertahanan kedua.
+        """
+        if not plan.matches(self.segments):
+            raise StalePlanError("subtitle berubah sejak pratinjau")
+        new_segments = self._segments_from_plan(plan)
+        self.before_op("before-quality-fix")
+        self.replace_all(new_segments)

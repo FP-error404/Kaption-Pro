@@ -47,7 +47,10 @@ def small_button(master, text: str, command, width: int = 64, danger: bool = Fal
                          text_color=Theme.GOLD, font=Theme.font(11, "bold"))
 
 
-def section_header(master, text: str) -> None:
-    ctk.CTkLabel(master, text=text, text_color=Theme.GOLD, anchor="w",
-                 font=Theme.font(12, "bold")).pack(fill="x", padx=14, pady=(10, 2))
-    ctk.CTkFrame(master, height=1, fg_color=Theme.GOLD_DIM).pack(fill="x", padx=14, pady=(0, 6))
+def section_header(master, text: str, label_h: int | None = None, pad: tuple[int, int] = (10, 2),
+                   rule_pad: tuple[int, int] = (0, 6)) -> None:
+    """Judul seksi + garis emas. Parameter opsional untuk versi kompak (panel preset); default = tampilan lama."""
+    height = {} if label_h is None else {"height": label_h}
+    ctk.CTkLabel(master, text=text, text_color=Theme.GOLD, anchor="w", font=Theme.font(12, "bold"),
+                 **height).pack(fill="x", padx=14, pady=pad)
+    ctk.CTkFrame(master, height=1, fg_color=Theme.GOLD_DIM).pack(fill="x", padx=14, pady=rule_pad)
