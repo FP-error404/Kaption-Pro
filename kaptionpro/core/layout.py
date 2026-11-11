@@ -9,14 +9,28 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------------------------------------------
 # Tinggi panel preset (kolom kanan, mode landscape)
 # ---------------------------------------------------------------------------------------------------------------
-# Satuan di sini = tinggi PANEL SEBENARNYA di layar (px logis). Sejak v1.9.15.2 panel dibungkus wadah berukuran tetap
-# (WorkspaceScreen.side_box, grid_propagate(False)), jadi tinggi ini DIPATUHI persis. Sebelumnya `configure(height=)`
-# pada CTkScrollableFrame tidak berpengaruh di bawah ~210 px: scrollbar vertikal CustomTkinter meminta tinggi 200 px
-# (+ padding 2 x radius + border), sehingga panel "bandel" di 210 px. Buktinya dari log CI v1.9.15: dengan panel = 210,
-# elemen lain di Linux (768 - 210 - 394) dan di Windows (749 - 210 - 375) sama-sama 164 px.
+# Satuan di sini = tinggi panel preset yang DIMINTA (px logis). v1.9.15.2 membungkus panel dalam wadah tetap
+# (WorkspaceScreen.side_box, grid_propagate(False)) dengan dugaan penyebabnya CTkScrollableFrame (scrollbar-nya meminta
+# 200 px). Dugaan itu belum cukup: log CI v1.9.15.2 di 1024x680 mencatat `diminta=120 nyata=210` untuk side_box SENDIRI
+# (bukan isi scroll-nya), jadi baris grid-nya tetap >= ~210 px apa pun yang diminta (penyebab pastinya belum terbukti;
+# test_11 kini mencetak tinggi tiap baris grid agar log berikutnya menunjukkannya). Sampai itu jelas, v1.9.15.3 TIDAK
+# bergantung pada tinggi di bawah ~210 px: pada jendela pendek (< SIDE_AUTOHIDE_H) panel preset disembunyikan.
+# Bukti lama dari CI v1.9.15: dengan panel = 210, elemen lain di Linux (768 - 210 - 394) dan Windows (749 - 210 - 375)
+# sama-sama 164 px.
 SIDE_H_MAX = 250             # tinggi panel preset pada jendela lega
 SIDE_H_MIN = 120             # perkiraan awal tidak pernah di bawah ini
 SIDE_H_FLOOR = SIDE_H_MIN    # penyetelan akhir juga tidak pernah memaksa panel lebih kecil dari ini (isinya di-scroll)
+
+# Tinggi terkecil yang NYATA diberikan grid kepada panel preset di Linux/xvfb (log CI v1.9.15.2: diminta 120, nyata 210).
+# Di Windows belum teramati; angka ini dipakai konservatif untuk menurunkan SIDE_AUTOHIDE_H.
+OBSERVED_SIDE_MIN_H = 210
+# Tinggi editor tanpa tabel yang terukur di CI dengan toolbar 1 baris (768 -> editor 394, tabel 126).
+EDITOR_CHROME_MEASURED_H = 268
+# Jendela lebih pendek dari ini (px logis): panel preset disembunyikan otomatis di mode landscape, editor memakai seluruh
+# kolom kanan. Turunan: 164 (elemen lain) + 210 (panel nyata) + 268 (editor tanpa tabel) + 90 (tabel) = 732; dibulatkan
+# ke 740 sebagai margin. Jendela CI Windows 749 px dan Linux 768 px tetap menampilkan panel (tabel 126 px di sana).
+# Tombol "Panel" di top bar tetap bisa menampilkannya kapan saja (pilihan pengguna menang atas otomatis).
+SIDE_AUTOHIDE_H = 740
 
 # Kolom kanan (landscape) ditumpuk dari atas ke bawah: top bar, panel preset, editor, tombol export, job bar.
 # Komponen di bawah = elemen LAIN (di luar panel preset dan editor).
@@ -83,14 +97,38 @@ def rebalanced_side_height(current: int, table_px: float, scaling: float = 1.0, 
     return max(SIDE_H_FLOOR, current - shrink)
 
 
+def side_panel_autohide(window_h: float, scaling: float = 1.0) -> bool:
+    """
+    True bila jendela (landscape) terlalu pendek untuk menampilkan panel preset DAN tabel subtitle >= TABLE_MIN_PX.
+    `window_h` dalam piksel FISIK (winfo_height); belum terpasang (<=1) -> False (jangan menyembunyikan apa pun dulu).
+    """
+    if window_h <= 1:
+        return False
+    return window_h / _scale(scaling) < SIDE_AUTOHIDE_H
+
+
+def side_panel_visible(mode: str | None, window_h: float, scaling: float = 1.0, user_choice: bool | None = None) -> bool:
+    """
+    Apakah panel preset tampil. Pilihan pengguna (tombol Panel) selalu menang; selain itu otomatis: tersembunyi hanya di
+    mode landscape pada jendela pendek (portrait memakai panel 150 px yang bisa di-scroll, tidak ikut disembunyikan).
+    """
+    if user_choice is not None:
+        return user_choice
+    if mode != "landscape":
+        return True
+    return not side_panel_autohide(window_h, scaling)
+
+
 def guaranteed_table_px(window_h: float, scaling: float = 1.0) -> int:
     """
-    Tinggi tabel subtitle yang DIJAMIN pada jendela setinggi `window_h` (fisik): TABLE_MIN_PX bila jendela cukup tinggi,
-    selain itu sisa terbesar yang masih mungkin dengan panel preset di SIDE_H_FLOOR. Dihitung konservatif
+    Tinggi tabel subtitle yang DIJAMIN pada jendela setinggi `window_h` (fisik), dengan pengaturan otomatis (tanpa
+    pilihan pengguna): TABLE_MIN_PX bila ruang cukup, selain itu sisa terbesar yang masih mungkin. Jendela pendek
+    (side_panel_autohide) tanpa panel preset; jendela tinggi dengan panel di SIDE_H_FLOOR. Dihitung konservatif
     (RIGHT_COLUMN_FIXED_H memakai nilai CI terbesar), jadi hasil nyata biasanya sama atau lebih besar.
     """
     logical = window_h / _scale(scaling)
-    room = logical - RIGHT_COLUMN_FIXED_H - SIDE_H_FLOOR - EDITOR_CHROME_H
+    panel = 0 if side_panel_autohide(window_h, scaling) else SIDE_H_FLOOR
+    room = logical - RIGHT_COLUMN_FIXED_H - panel - EDITOR_CHROME_H
     return int(min(TABLE_MIN_PX, max(0, room)))
 
 
