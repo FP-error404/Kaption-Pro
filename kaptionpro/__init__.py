@@ -96,68 +96,6 @@ Perubahan v1.8 (audit keamanan data v1.7)
  * File partial FFmpeg bernama unik per proses (pid + UUID): export bersamaan ke tujuan yang sama
    tidak saling menghapus; export kedua ditolak dengan pesan jelas; partial basi milik proses mati dibersihkan.
 
-(Perubahan v1.9.18 - Celah P0 QualityRules + UI Laporan Kualitas dengan Auto-Fix yang aman:
- * P0: QualityRules(max_cps=10**10000) melempar OverflowError (math.isfinite pada int raksasa), bukan ValueError. Kini SEMUA
-   aturan angka lewat _as_seconds (bilangan nyata terhingga yang muat di float): int/Fraction raksasa, NaN, inf, bool, dan
-   teks ditolak dengan ValueError. max_chars_per_line dan max_lines dibatasi 1..10000 (MAX_RULE_INT). Pesan galat memakai
-   _safe_repr: di Python 3.11+ repr() int > 4300 digit melempar ValueError tersendiri, dan di 3.10 hasilnya sangat panjang.
- * Laporan Kualitas (ui/quality_dialog.py, baru): menu Alat > "📋 Laporan kualitas…" membuka daftar error/peringatan per baris
-   subtitle (nomor, waktu, tingkat, masalah, teks), filter Semua/Hanya error/Hanya peringatan, saklar "Aturan ketat"
-   (durasi 0,83-7 dtk, jeda >= 0,083 dtk), dan klik ganda/Enter melompat ke baris itu di editor. Tombol "✔ Auto-Fix" lama di
-   toolbar TIDAK diubah.
- * Perbaiki otomatis dengan alur Analyze -> Preview Changes -> Confirm -> Apply -> Undo. Urutannya dijaga kode yang diuji
-   (core/quality_flow.QualityFlow), bukan urutan tombol: pratinjau tidak mengubah apa pun; Apply hanya setelah konfirmasi
-   Ya/Tidak dan hanya sekali per konfirmasi; rencana basi (subtitle berubah sejak pratinjau) ditolak; backup
-   "before-quality-fix" dibuat sebelum diterapkan; penerapan = SATU langkah Undo editor; Undo diverifikasi (subtitle harus
-   kembali persis). Dialog tidak pernah mengubah subtitle sendiri; penerapan/pembatalan disuntikkan editor.
- * Perencana (core/quality_fix.py, baru, pure Python): sejajar baris (tidak menghapus/memecah/menggabung). Memperbaiki: baris
-   panjang/terlalu banyak baris (bungkus ulang seimbang; hanya spasi/pemisah baris berubah), overlap dan jeda pendek
-   (pendekkan akhir baris sebelumnya, atau geser awal baris berikutnya bila tak muat; tidak pernah di bawah batas aman 0,3 dtk
-   atau min_duration), CPS tinggi dan durasi singkat (perpanjang akhir ke ruang kosong, hanya bila kebutuhan terpenuhi PENUH).
-   Tidak diperbaiki otomatis tapi dilaporkan dengan alasan: waktu tidak valid, durasi terlalu panjang, teks bertag, kata lebih
-   panjang dari satu baris, dialog bergaris-awal yang tak muat. Hasil rencana diverifikasi dengan pemeriksa yang sama:
-   masalah selesai, masalah BARU akibat perbaikan (mis. CPS naik karena akhir dipendekkan demi menghilangkan overlap; ditandai
-   di pratinjau dan di dialog konfirmasi), dan sisa masalah. Word timestamp hanya dibuang pada baris yang WAKTUNYA berubah.
- * Tes baru: tests/test_quality_fix_v1918.py (66: P0, bungkus teks, perencana, fuzz, alur), tests/test_quality_dialog_v1918.py
-   (10: kode ASLI dialog dan editor dijalankan dengan GUI palsu: alur penuh, filter, lompat baris, ditolak/basi/gagal, Undo asli
-   editor), test_gui_smoke.py::test_16 (alur penuh di aplikasi nyata; prasyarat assertion, bukan skip). Catatan: widget Tk
-   nyata (tata letak dialog) baru terverifikasi oleh test_16 di CI.)
-
-(Perubahan v1.9.17 - Menutup 3 celah review v1.9.16 (tanpa fitur UI baru):
- * P0 test_15 false pass: tes pengukur panel Whisper memakai skipTest bila jendela/panel tidak sesuai, jadi panel yang
-   kekecilan tetap tampak "lolos". Kini prasyaratnya assertion (landscape, tinggi jendela >= batas autohide, panel
-   tampil) dan tinggi panel dibandingkan dengan kebutuhan lewat assertGreaterEqual: tes yang tak bisa mengukur GAGAL.
-   Hal yang sama dibereskan di test_14 (skipTest bila tidak landscape). Penjaga baru di core-tests
-   (NoSilentSkipInMeasuringGuiTests, memeriksa sumber lewat AST) membuat test_11/14/15 tidak bisa diam-diam kembali
-   memakai skip. Konsekuensi: bila runner CI gagal memberi jendela >= 740 px, tesnya merah (bukan lolos kosong).
- * P1 _valid_timing: waktu kini harus bilangan nyata terhingga (int/float/Fraction). Bool (True == 1 di Python),
-   teks ("0"), tipe lain (Decimal, list), NaN/inf, dan int raksasa yang tak muat di float (dulu OverflowError tak
-   tertangkap) dilaporkan sebagai INVALID_TIMING, tidak melempar. math.isfinite sebelumnya sudah dipakai pada nilai hasil
-   float(); yang baru adalah penolakan bool/teks dan OverflowError. cps() ikut menolak durasi bool.
-   Perubahan perilaku disengaja: v1.9.16 masih menerima teks numerik ("0", "2"); v1.9.17 menolaknya.
- * P1 QualityRules: min_duration, max_duration, min_gap (default None = mati, perilaku v1.9.16 tidak berubah). Kode baru:
-   duration_too_short, duration_too_long, gap_too_small (semuanya peringatan). Durasi dibandingkan dengan toleransi 1 mikrodetik
-   (2.83 - 2.0 = 0.8300000000000001 tidak memicu min_duration 0.83); jeda diukur dari segmen yang berakhir paling akhir
-   dan memakai overlap_tolerance; overlap tetap error dan tidak dilaporkan ganda sebagai jeda. Validasi aturan menolak
-   nilai <= 0, bool, teks, NaN/inf, dan max_duration < min_duration.
- * Tes baru: tests/test_subtitle_quality_v1917.py (56). Satu tes v1.9.16 diubah mengikuti perilaku baru (teks ditolak).)
-
-(Perubahan v1.9.16 - Panel preset lebih rapi + fondasi Subtitle Quality Checker (tanpa UI):
- * Panel Language Presets dirapikan: tombol preset 34 -> 28 px, jarak antar-tombol dan judul seksi dikecilkan, label/menu
-   Whisper dan Penerjemah dipadatkan. Menu Whisper model sebelumnya berakhir di ~233 px, padahal panel hanya 183-250 px
-   (terpotong di bawah, laporan review ChatGPT v1.9.15.3); kini berakhir di 169 px. Semua ukuran ada di core/layout.py
-   (SIDE_*, side_whisper_bottom) dan dipakai langsung oleh SidePanel; tes menjaga menu Whisper muat di panel terpendek
-   yang masih ditampilkan (tepat di batas autohide), dan akan gagal bila preset ditambah tanpa menyesuaikan jarak.
-   Warna, font, tombol Generate, pengaturan style, Video Preview, dan Export tidak diubah.
- * core/subtitle_quality.py (BARU, pure Python, belum terhubung ke UI): check_subtitles(segments, QualityRules) ->
-   QualityReport. Memeriksa CPS (peringatan > 17, error > 25), panjang baris (> 42 karakter), jumlah baris (> 2),
-   overlap (dibandingkan dengan segmen yang berakhir paling akhir, bukan hanya tetangga; toleransi 1 ms), dan waktu
-   tidak valid (NaN/None/akhir <= awal; dilaporkan, tidak melempar). Tag <i> dan {\an8} tidak dihitung; data tidak diubah.
-   O(n log n): 1000 baris, video 2 jam (~2400 baris), dan kasus terburuk 5000 baris saling tumpang tindih ada di tes
-   performa (batas longgar untuk runner CI). Perbaikan otomatis tetap tugas Auto-Fix.
- * Tes baru: tests/test_subtitle_quality_v1916.py (59), tests/test_side_panel_v1916.py (13), test_gui_smoke.py::test_15
-   (mengukur tepi bawah menu Whisper vs tepi bawah panel di aplikasi nyata dan mencetak angkanya).)
-
 (Perubahan v1.9.15.3 - Panel preset disembunyikan otomatis di jendela pendek (test_11 di 1024x680):
  * Gejala (log CI v1.9.15.2, Linux): diminta=(1024, 680), panel preset diminta=120 nyata=210, editor=306, tabel=62 px.
    Angka 210 adalah tinggi side_box (wadah tetap) itu sendiri, bukan isi CTkScrollableFrame, jadi dugaan v1.9.15.2
@@ -307,4 +245,4 @@ Perubahan v1.8 (audit keamanan data v1.7)
 output, backup berversi, lock atomik, VLC volume/frame-step, editor cari/filter/undo-redo/bulk.)
 """
 
-__version__ = "1.9.18"
+__version__ = "1.9.15.3"
