@@ -27,20 +27,7 @@ from ..config import (
 )
 from ..core.storage import BackupInfo
 from ..core.jobs import JobTracker
-from ..core.layout import (
-    SIDE_FIELD_LABEL_H,
-    SIDE_FIELD_LABEL_PAD,
-    SIDE_HEADER_LABEL_H,
-    SIDE_HEADER_PAD,
-    SIDE_MENU_H,
-    SIDE_MENU_PAD,
-    SIDE_PRESET_BTN_H,
-    SIDE_PRESET_PAD,
-    SIDE_RULE_PAD,
-    rebalanced_side_height,
-    side_panel_height,
-    side_panel_visible,
-)
+from ..core.layout import rebalanced_side_height, side_panel_height, side_panel_visible
 from ..core.privacy import ACK_KEY, is_acknowledged, with_acknowledged
 from ..core.utils import CancelledError, fmt_clock, normalize_hex, safe_filename
 from ..models import (
@@ -442,38 +429,36 @@ class SidePanel(ctk.CTkScrollableFrame):
         self.on_translator_changed = on_translator_changed
         self._preset_buttons: dict[str, ctk.CTkButton] = {}
 
-        # Ukuran/jarak dari core/layout.py (SIDE_*): dihitung agar menu Whisper model tampak utuh di panel terpendek
-        # yang masih ditampilkan (layout.side_whisper_bottom; dijaga tes).
-        section_header(self, "LANGUAGE PRESETS", SIDE_HEADER_LABEL_H, SIDE_HEADER_PAD, SIDE_RULE_PAD)
+        section_header(self, "LANGUAGE PRESETS")
         for key, preset in LANGUAGE_PRESETS.items():
-            btn = ctk.CTkButton(self, text=preset.label, height=SIDE_PRESET_BTN_H, corner_radius=Theme.RADIUS, anchor="w",
+            btn = ctk.CTkButton(self, text=preset.label, height=34, corner_radius=Theme.RADIUS, anchor="w",
                                 font=Theme.font(13, "bold"), command=lambda k=key: self._select_preset(k))
-            btn.pack(fill="x", padx=14, pady=SIDE_PRESET_PAD)
+            btn.pack(fill="x", padx=14, pady=3)
             self._preset_buttons[key] = btn
 
-        ctk.CTkLabel(self, text="Whisper model", text_color=Theme.TEXT_MUTED, anchor="w", height=SIDE_FIELD_LABEL_H,
-                     font=Theme.font(11)).pack(fill="x", padx=14, pady=SIDE_FIELD_LABEL_PAD)
+        ctk.CTkLabel(self, text="Whisper model", text_color=Theme.TEXT_MUTED, anchor="w",
+                     font=Theme.font(11)).pack(fill="x", padx=14, pady=(6, 0))
         self.model_var = ctk.StringVar(value="small")
         self.model_menu = ctk.CTkOptionMenu(
-            self, values=WHISPER_MODELS, variable=self.model_var, height=SIDE_MENU_H,
+            self, values=WHISPER_MODELS, variable=self.model_var,
             fg_color=Theme.SURFACE_2, button_color=Theme.GOLD_DIM, button_hover_color=Theme.GOLD,
             text_color=Theme.TEXT, font=Theme.font(12),
             command=lambda v: self.on_model_changed(v))
-        self.model_menu.pack(fill="x", padx=14, pady=SIDE_MENU_PAD)
+        self.model_menu.pack(fill="x", padx=14, pady=(0, 4))
 
-        ctk.CTkLabel(self, text="Penerjemah", text_color=Theme.TEXT_MUTED, anchor="w", height=SIDE_FIELD_LABEL_H,
-                     font=Theme.font(11)).pack(fill="x", padx=14, pady=SIDE_FIELD_LABEL_PAD)
+        ctk.CTkLabel(self, text="Penerjemah", text_color=Theme.TEXT_MUTED, anchor="w",
+                     font=Theme.font(11)).pack(fill="x", padx=14, pady=(4, 0))
         self.translator_var = ctk.StringVar(value=TRANSLATORS["google"])
         self.translator_menu = ctk.CTkOptionMenu(
-            self, values=list(TRANSLATORS.values()), variable=self.translator_var, height=SIDE_MENU_H,
+            self, values=list(TRANSLATORS.values()), variable=self.translator_var,
             fg_color=Theme.SURFACE_2, button_color=Theme.GOLD_DIM, button_hover_color=Theme.GOLD,
             text_color=Theme.TEXT, font=Theme.font(12), command=self._on_translator_menu)
-        self.translator_menu.pack(fill="x", padx=14, pady=SIDE_MENU_PAD)
+        self.translator_menu.pack(fill="x", padx=14, pady=(0, 4))
 
         self.generate_btn = gold_button(self, "✨  Generate Subtitles (AI)", on_generate, filled=False, height=36)
         self.generate_btn.pack(fill="x", padx=14, pady=(6, 2))
 
-        section_header(self, "TEXT STYLES", SIDE_HEADER_LABEL_H, SIDE_HEADER_PAD, SIDE_RULE_PAD)
+        section_header(self, "TEXT STYLES")
         self.style_var = ctk.StringVar(value="karaoke")
         for key, label in TEXT_STYLES.items():
             ctk.CTkRadioButton(self, text=label, value=key, variable=self.style_var,
