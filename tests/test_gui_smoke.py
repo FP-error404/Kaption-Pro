@@ -191,6 +191,28 @@ class GuiSmokeTests(unittest.TestCase):
                 return until is None
             time.sleep(0.01)
 
+    @classmethod
+    def pump_progress(cls, progress, done, stall: float = 10.0, cap: float = 90.0) -> tuple[bool, str]:
+        """Seperti pump(until=...), tetapi gagal HANYA bila tidak ada kemajuan `stall` detik (macet) atau lewat `cap` detik.
+
+        Batas waktu absolut menghukum mesin lambat (runner Windows) padahal pekerjaannya jalan terus; batas macet menghukum yang
+        benar-benar rusak (antrean berhenti / UI beku). Mengembalikan (berhasil, alasan) agar pesan gagal bisa menunjuk penyebab.
+        """
+        start = last_change = time.monotonic()
+        last = progress()
+        while True:
+            cls.app.update()
+            if done():
+                return True, ""
+            now, current = time.monotonic(), progress()
+            if current != last:
+                last, last_change = current, now
+            if now - last_change >= stall:
+                return False, f"macet: tidak ada kemajuan selama {stall:g} detik"
+            if now - start >= cap:
+                return False, f"melewati batas atas {cap:g} detik (masih ada kemajuan, mesin sangat lambat)"
+            time.sleep(0.01)
+
     def shot(self, name: str, widget=None) -> None:
         """Screenshot best-effort ke folder artefak (tidak pernah menggagalkan tes)."""
         try:
@@ -360,12 +382,20 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIsNone(ws._job_kind)
 
     def test_08_ui_queue_keeps_event_loop_responsive(self):
-        """Banjir callback dari worker: timer UI tetap berdetak SELAMA antrean diproses (bukan setelahnya)."""
+        """Banjir callback dari worker: timer UI tetap berdetak SELAMA antrean diproses (bukan setelahnya).
+
+        v1.9.18.1: di Windows `time.sleep(0.002)` bisa tidur ~15,6 ms (resolusi timer OS, terutama Python 3.10), sehingga
+        "2 ms kerja" menjadi 8x lebih lama dan 300 callback melewati batas 30 detik (hanya 257/300 terproses). Kini
+        pekerjaan tiruan adalah busy-wait 2 ms (sama di semua OS) dan kegagalan ditentukan oleh KEMACETAN (tanpa kemajuan
+        10 detik) bukan jam dinding. SEMUA callback tetap wajib terproses: callback yang hilang adalah bug nyata.
+        """
         app = self.app
         total, processed, ticks_during_backlog = 300, [0], [0]
 
         def work() -> None:
-            time.sleep(0.002)
+            end = time.perf_counter() + 0.002            # sibuk 2 ms (bukan sleep: granularitas timer Windows ~15,6 ms)
+            while time.perf_counter() < end:
+                pass
             processed[0] += 1
 
         def tick() -> None:
@@ -378,10 +408,13 @@ class GuiSmokeTests(unittest.TestCase):
             for _ in range(total):
                 app.post(work)
 
+        started = time.monotonic()
         app.after(10, tick)
         threading.Thread(target=flood, daemon=True).start()
-        self.assertTrue(self.pump(until=lambda: processed[0] >= total, timeout=30),
-                        f"hanya {processed[0]}/{total} callback terproses")
+        ok, why = self.pump_progress(lambda: processed[0], lambda: processed[0] >= total)
+        print(f"[test_08] {processed[0]}/{total} callback dalam {time.monotonic() - started:.1f} dtk, "
+              f"detak UI selama antrean={ticks_during_backlog[0]}")
+        self.assertTrue(ok, f"hanya {processed[0]}/{total} callback terproses ({why})")
         self.assertGreaterEqual(ticks_during_backlog[0], 5,
                                 "event loop tidak sempat berjalan di tengah antrean (UI tampak membeku)")
 
@@ -589,10 +622,11 @@ class GuiSmokeTests(unittest.TestCase):
         ws._side_user = None
         ws._apply_layout()
         self.pump(0.5)
-        if ws._mode != "landscape":
-            self.skipTest(f"jendela tidak landscape ({ws.winfo_width()}x{ws.winfo_height()}); toggle diuji di landscape")
         table: dict[bool, int] = {}
         try:
+            # v1.9.17: prasyarat memakai assert, BUKAN skipTest: tes yang tak bisa mengukur harus gagal, bukan lolos kosong.
+            self.assertEqual(ws._mode, "landscape",
+                             f"jendela {ws.winfo_width()}x{ws.winfo_height()} tidak landscape; toggle diuji di landscape")
             for _ in range(2):
                 state = ws._side_visible
                 self.assertEqual(ws.side_box.winfo_ismapped(), state)
@@ -614,6 +648,91 @@ class GuiSmokeTests(unittest.TestCase):
             self._resize(1366, 768)
             ws._apply_layout()
             self.pump(0.3)
+
+    def test_15_whisper_model_menu_is_fully_visible_in_the_presets_panel(self):
+        """v1.9.16: ChatGPT melaporkan menu Whisper model terpotong di bawah panel preset; kini harus tampak utuh."""
+        from kaptionpro.core import layout
+        ws = self.ensure_workspace()
+        self._resize(1366, 768)
+        ws._side_user = None
+        ws._apply_layout()
+        self.pump(0.6)
+        try:
+            # v1.9.17: prasyarat memakai assert, BUKAN skipTest. Tes yang tak bisa mengukur harus GAGAL; dulu skip membuat
+            # panel yang kekecilan tetap tampak "lolos" (false pass, temuan review v1.9.16).
+            scale = ws._widget_scaling()
+            self.assertEqual(ws._mode, "landscape", f"jendela {ws.winfo_width()}x{ws.winfo_height()} tidak landscape")
+            self.assertGreaterEqual(ws.winfo_height() / scale, layout.SIDE_AUTOHIDE_H,
+                                    f"jendela {ws.winfo_height()}px < batas autohide: panel tak tampil, tak terukur")
+            self.assertTrue(ws._side_visible, "panel preset harus tampil pada jendela setinggi ini")
+            try:
+                ws.side._parent_canvas.yview_moveto(0)                 # API privat CTk; gagal -> abaikan (sudah di atas)
+                self.pump(0.2)
+            except Exception:  # noqa: BLE001
+                pass
+            menu, box = ws.side.model_menu, ws.side_box
+            menu_bottom = menu.winfo_rooty() + menu.winfo_height()
+            box_bottom = box.winfo_rooty() + box.winfo_height()
+            need = round((layout.side_whisper_bottom(len(ws.side._preset_buttons)) + layout.SIDE_FRAME_ALLOWANCE) * scale)
+            print(f"[test_15] panel={box.winfo_height()}px, butuh>={need}px, tepi bawah menu Whisper={menu_bottom}, "
+                  f"tepi bawah panel={box_bottom}, menu mapped={menu.winfo_ismapped()}, tinggi menu={menu.winfo_height()}")
+            self.shot("15_presets_panel")
+            self.assertGreaterEqual(box.winfo_height(), need,
+                                    f"panel preset {box.winfo_height()}px < kebutuhan {need}px (menu Whisper utuh)")
+            self.assertTrue(menu.winfo_ismapped(), "menu Whisper tidak tampil")
+            self.assertLessEqual(menu_bottom, box_bottom, f"menu Whisper terpotong {menu_bottom - box_bottom}px di bawah panel")
+        finally:
+            self._resize(1366, 768)
+            ws._apply_layout()
+            self.pump(0.3)
+
+    def test_16_quality_report_dialog_and_the_safe_autofix_flow(self):
+        """
+        v1.9.18: Laporan Kualitas + Perbaiki otomatis dengan alur Analyze -> Preview -> Confirm -> Apply -> Undo pada aplikasi
+        nyata. Prasyarat memakai assert (bukan skip): tes yang tak bisa menjalankan alurnya harus gagal.
+        """
+        from kaptionpro.core import subtitle_quality as sq
+        from kaptionpro.models import SubtitleSegment
+        ws = self.ensure_workspace()
+        ed = ws.editor
+        previous = ed._freeze(ed.segments)
+        segs = [SubtitleSegment(0.0, 2.5, "Halo dunia"), SubtitleSegment(2.0, 4.0, "Apa kabar"),
+                SubtitleSegment(8.0, 9.0, "a\nb\nc"), SubtitleSegment(20.0, 20.5, "x" * 30)]
+        ed.replace_all(segs, push_undo=False)
+
+        def state():
+            return [(s.start, s.end, s.text) for s in ed.segments]
+
+        original = state()
+        dlg = None
+        try:
+            ed._open_quality_report()
+            self.pump(0.5)
+            dlg = ed._quality_dialog
+            self.assertIsNotNone(dlg, "dialog laporan kualitas tidak terbuka")
+            self.assertTrue(dlg.winfo_exists())
+            self.assertEqual(sorted(dlg.report_tree.get_children()), ["1", "2", "3"])
+            dlg._ask = lambda text: True                                  # jawaban dialog Ya/Tidak (tanpa popup)
+            dlg._start_fix()                                              # Analyze -> Preview
+            self.pump(0.3)
+            self.assertEqual(dlg._view, "preview")
+            self.assertEqual(len(dlg.preview_tree.get_children()), 3)
+            self.assertEqual(state(), original, "pratinjau TIDAK boleh mengubah subtitle")
+            dlg._confirm_and_apply()                                      # Confirm -> Apply
+            self.pump(0.4)
+            self.assertNotEqual(state(), original)
+            self.assertTrue(sq.check_subtitles(ed.segments).ok, "hasil perbaikan harus lolos pemeriksa")
+            self.assertEqual(dlg.btn_undo.winfo_manager(), "pack", "tombol Undo harus tersedia setelah apply")
+            self.shot("16_quality_report")
+            dlg._undo()                                                   # Undo
+            self.pump(0.4)
+            self.assertEqual(state(), original, "Undo harus mengembalikan PERSIS")
+        finally:
+            if dlg is not None and dlg.winfo_exists():
+                dlg.destroy()
+            ed._quality_dialog = None
+            ed.set_segments(ed._thaw(previous))
+            self.pump(0.2)
 
     def test_12_theme_radius_is_applied_everywhere(self):
         import customtkinter as ctk

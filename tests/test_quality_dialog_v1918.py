@@ -237,9 +237,11 @@ assert fp(ed.segments) == original, "pratinjau tidak boleh mengubah editor"
 f.confirm()
 assert fp(ed.segments) == original, "konfirmasi saja tidak mengubah editor"
 real_replace_all = ed.replace_all
-def spying_replace_all(new, push_undo=True):
+def spying_replace_all(new, push_undo=True, **kw):
     ed.calls.append(("replace_all", len(new), push_undo))
-    return real_replace_all(new, push_undo)
+    assert kw.get("label") == "before-quality-fix", kw                         # v1.9.19: langkah Undo bertanda
+    assert kw.get("expect") is not None, "hasil harus diverifikasi terhadap rencana"
+    return real_replace_all(new, push_undo, **kw)
 ed.replace_all = spying_replace_all
 count = f.apply(ed.segments, ed._apply_quality_plan)
 assert count == len(plan.changes) == 2, (count, [c.index for c in plan.changes])
@@ -340,8 +342,8 @@ class WiringSourceTests(unittest.TestCase):
 
     def test_apply_does_backup_first_then_one_undoable_replace(self):
         body = self.editor[self.editor.index("def _apply_quality_plan("):]
-        self.assertLess(body.index("if not plan.matches(self.segments)"), body.index('self.before_op("before-quality-fix")'))
-        self.assertLess(body.index('self.before_op("before-quality-fix")'), body.index("self.replace_all(new_segments)"))
+        self.assertLess(body.index("if not plan.matches(self.segments)"), body.index("self.before_op(QUALITY_FIX_LABEL)"))
+        self.assertLess(body.index("self.before_op(QUALITY_FIX_LABEL)"), body.index("self.replace_all(new_segments"))
         self.assertEqual(body.count("replace_all("), 1, "satu langkah Undo")
         self.assertNotIn("push_undo=False", body)
 
