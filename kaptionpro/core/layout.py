@@ -67,33 +67,6 @@ MIN_USABLE = (320, 240)      # lantai mutlak: di bawah ini jendela tak bisa dipa
 SCREEN_MARGIN = (40, 110)    # sisakan ruang untuk taskbar + title bar agar jendela tidak melebihi layar
 
 
-# ---------------------------------------------------------------------------------------------------------------
-# Isi panel preset (v1.9.16): menu Whisper model harus tampak UTUH di panel terpendek yang masih menampilkannya
-# ---------------------------------------------------------------------------------------------------------------
-# Satuan px logis; widget memakai konstanta ini langsung (ui/workspace.py: SidePanel), jadi angka di sini = angka di layar.
-# Sebelum v1.9.16: header 28+12+1+6 = 47, tiga tombol preset 3 x (34+6) = 120, label Whisper 28+6, menu 28+4 -> menu Whisper
-# berakhir di ~233 px, sedangkan panel hanya 183-250 px sehingga menu terpotong di bawah.
-SIDE_HEADER_LABEL_H = 18
-SIDE_HEADER_PAD = (4, 1)         # pady label judul seksi (atas, bawah)
-SIDE_RULE_H = 1                  # garis emas di bawah judul
-SIDE_RULE_PAD = (0, 3)
-SIDE_PRESET_BTN_H = 28
-SIDE_PRESET_PAD = (1, 2)         # pady tiap tombol preset
-SIDE_FIELD_LABEL_H = 18          # label "Whisper model" / "Penerjemah"
-SIDE_FIELD_LABEL_PAD = (3, 0)
-SIDE_MENU_H = 26                 # option menu Whisper / Penerjemah
-SIDE_MENU_PAD = (0, 2)
-SIDE_FRAME_ALLOWANCE = 12        # border 1 + padding dalam CTkScrollableFrame (radius 4) atas-bawah + kelonggaran
-
-
-def side_whisper_bottom(preset_count: int) -> int:
-    """Tinggi isi panel preset dari atas sampai tepi bawah menu Whisper model (px logis), untuk `preset_count` preset."""
-    header = SIDE_HEADER_LABEL_H + sum(SIDE_HEADER_PAD) + SIDE_RULE_H + sum(SIDE_RULE_PAD)
-    presets = preset_count * (SIDE_PRESET_BTN_H + sum(SIDE_PRESET_PAD))
-    whisper = SIDE_FIELD_LABEL_H + sum(SIDE_FIELD_LABEL_PAD) + SIDE_MENU_H + sum(SIDE_MENU_PAD)
-    return header + presets + whisper
-
-
 def _scale(scaling: float) -> float:
     return scaling if scaling and scaling > 0 else 1.0
 
