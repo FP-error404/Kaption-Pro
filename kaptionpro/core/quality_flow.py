@@ -7,6 +7,8 @@ kode yang diuji, bukan oleh urutan tombol. Aturannya:
   * apply() hanya setelah confirm() dan hanya SEKALI per konfirmasi (konfirmasi habis dipakai);
   * apply() menolak (StalePlanError) bila subtitle sudah berubah sejak pratinjau dibuat: tidak pernah menerapkan rencana basi;
   * undo() hanya setelah apply() dan diverifikasi: subtitle harus kembali PERSIS seperti sebelum apply.
+v1.9.19 (keandalan data): apply_fn yang gagal WAJIB sudah membatalkan semua efeknya (editor memakai transaksi: isi subtitle
+dan riwayat Undo dikembalikan); undo_fn boleh menolak dengan UndoMismatchError bila langkah Undo teratas BUKAN hasil apply ini.
 Cara menerapkan dan membatalkan (backup, riwayat Undo editor) disuntikkan sebagai fungsi, jadi modul ini tidak tahu soal GUI.
 """
 
@@ -20,12 +22,23 @@ from . import subtitle_quality as sq
 IDLE, ANALYZED, PREVIEW, CONFIRMED, APPLIED, UNDONE = "idle", "analyzed", "preview", "confirmed", "applied", "undone"
 
 
+QUALITY_FIX_LABEL = "before-quality-fix"     # penanda langkah Undo (dan nama backup) milik perbaikan kualitas
+
+
 class FlowError(RuntimeError):
     """Langkah dipanggil di luar urutan yang diizinkan."""
 
 
 class StalePlanError(FlowError):
     """Subtitle berubah sejak pratinjau dibuat; rencana tidak boleh diterapkan."""
+
+
+class UndoMismatchError(FlowError):
+    """Langkah Undo teratas bukan operasi Quality Fix yang mau dibatalkan; tidak ada yang diubah."""
+
+
+class ApplyVerificationError(RuntimeError):
+    """Hasil penerapan tidak sama dengan rencana yang dikonfirmasi pengguna; penerapan dibatalkan (rollback)."""
 
 
 class QualityFlow:
@@ -35,6 +48,7 @@ class QualityFlow:
         self.report: sq.QualityReport | None = None
         self.plan: qf.FixPlan | None = None
         self.applied_count = 0
+        self.receipt: object = None                 # bukti dari apply_fn (mis. nomor langkah Undo) untuk undo yang tepat sasaran
         self.history: list[str] = [IDLE]
 
     def _go(self, stage: str) -> None:
@@ -53,6 +67,7 @@ class QualityFlow:
         self.report = sq.check_subtitles(segments, self.rules)
         self.plan = None
         self.applied_count = 0
+        self.receipt = None
         self._go(ANALYZED)
         return self.report
 
@@ -84,7 +99,8 @@ class QualityFlow:
         """
         Terapkan rencana lewat `apply_fn(plan)` (UI: backup + satu langkah Undo). Mengembalikan jumlah baris yang diubah.
         Konfirmasi habis dipakai; bila apply_fn gagal, tahap kembali ke ANALYZED dan galat diteruskan (tidak setengah jadi
-        dari sisi alur; tanggung jawab apply_fn untuk tidak mengubah data bila gagal).
+        dari sisi alur; tanggung jawab apply_fn untuk tidak mengubah data bila gagal). Nilai kembalian apply_fn disimpan
+        di `receipt`.
         """
         self._require(CONFIRMED)
         plan = self.plan
@@ -94,11 +110,13 @@ class QualityFlow:
             self._go(ANALYZED)
             raise StalePlanError("subtitle berubah sejak pratinjau; analisis ulang dulu")
         try:
-            apply_fn(plan)
+            receipt = apply_fn(plan)
         except Exception:
             self.plan = None
+            self.receipt = None
             self._go(ANALYZED)
             raise
+        self.receipt = receipt
         self.applied_count = len(plan.changes)
         self._go(APPLIED)
         return self.applied_count
@@ -116,9 +134,17 @@ class QualityFlow:
         self._require(APPLIED)
         plan = self.plan
         assert plan is not None
-        undo_fn()
+        try:
+            undo_fn()
+        except UndoMismatchError:                   # ditolak sebelum mengubah apa pun: alur selesai, perlu analisis ulang
+            self.plan = None
+            self.applied_count = 0
+            self.receipt = None
+            self._go(ANALYZED)
+            raise
         restored = plan.matches(get_segments())
         self.plan = None
         self.applied_count = 0
+        self.receipt = None
         self._go(UNDONE if restored else ANALYZED)
         return restored

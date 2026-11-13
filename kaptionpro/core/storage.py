@@ -465,7 +465,7 @@ class ProjectStore:
         for d in items:
             try:
                 segs.append(SubtitleSegment.from_dict(d))
-            except (KeyError, TypeError, ValueError, AttributeError):
+            except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
                 dropped += 1
         return segs, dropped
 

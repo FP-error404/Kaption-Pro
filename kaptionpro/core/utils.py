@@ -102,7 +102,7 @@ def _clamp_num(v, default: float, lo: float, hi: float) -> float:
     """Ubah ke float, tolak NaN/inf/non-angka (-> default), lalu batasi ke [lo, hi]."""
     try:
         x = float(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     if not math.isfinite(x):
         return default
