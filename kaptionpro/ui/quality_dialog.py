@@ -16,7 +16,7 @@ from typing import Callable
 from ..config import Theme, ctk, log
 from ..core import quality_fix as qf
 from ..core import subtitle_quality as sq
-from ..core.quality_flow import FlowError, QualityFlow, StalePlanError
+from ..core.quality_flow import FlowError, QualityFlow, StalePlanError, UndoMismatchError
 from ..core.utils import srt_time
 from .components import gold_button
 
@@ -25,6 +25,19 @@ STRICT_RULES = sq.QualityRules(min_duration=0.83, max_duration=7.0, min_gap=0.08
 MAX_ROWS = 5000                     # batas baris yang ditampilkan agar dialog tetap responsif pada project raksasa
 FILTERS = {"all": "Semua", "error": "Hanya error", "warning": "Hanya peringatan"}
 LEVEL_TEXT = {sq.ERROR: "Error", sq.WARNING: "Peringatan"}
+
+
+def fmt_int(n: int) -> str:
+    """Angka dengan pemisah ribuan titik (gaya Indonesia): 5000 -> '5.000'."""
+    return f"{n:,}".replace(",", ".")
+
+
+def limit_notice(shown: int, total: int, noun: str, tail: str = "") -> str:
+    """Pemberitahuan bila daftar dipotong (v1.9.19); string kosong bila semua ditampilkan. Tidak pernah memotong diam-diam."""
+    if total <= shown:
+        return ""
+    text = f"⚠ Daftar dipotong: hanya {fmt_int(shown)} dari {fmt_int(total)} {noun} yang ditampilkan."
+    return f"{text} {tail}" if tail else text
 
 
 def one_line(text: object, limit: int = 70) -> str:
@@ -180,21 +193,23 @@ class QualityReportDialog(ctk.CTkToplevel):
         assert report is not None
         tree = self.report_tree
         tree.delete(*tree.get_children())
-        key, shown = self._filter_key(), 0
+        key, shown, matching = self._filter_key(), 0, 0
         for index, issues in sorted(report.by_index().items()):
             worst = sq.ERROR if any(i.severity == sq.ERROR for i in issues) else sq.WARNING
             if key != "all" and not any(i.severity == key for i in issues):
                 continue
+            matching += 1                                   # hitung SEMUA yang cocok filter, juga yang tidak ditampilkan
             if shown >= MAX_ROWS:
-                break
+                continue
             seg = segs[index] if index < len(segs) else None
             tree.insert("", "end", iid=str(index), tags=(worst,), values=(
                 index + 1, _span(getattr(seg, "start", None), getattr(seg, "end", None)), LEVEL_TEXT[worst],
                 " • ".join(i.message for i in issues), one_line(getattr(seg, "text", ""), 50)))
             shown += 1
-        total_rows = len(report.by_index())
-        extra = f"  (menampilkan {MAX_ROWS} baris pertama dari {total_rows})" if total_rows > MAX_ROWS and key == "all" else ""
-        self.summary_label.configure(text=report.summary() + extra)
+        notice = limit_notice(shown, matching, "baris bermasalah",
+                              "Gunakan filter, atau perbaiki lalu klik Analisis ulang untuk melihat sisanya.")
+        self.summary_label.configure(text=report.summary() + (("\n" + notice) if notice else ""),
+                                     text_color=Theme.WARN_TEXT if notice else Theme.TEXT)
 
     def _show(self, view: str) -> None:
         self._view = view
@@ -241,13 +256,17 @@ class QualityReportDialog(ctk.CTkToplevel):
         tree = self.preview_tree
         tree.delete(*tree.get_children())
         flagged = {index for index, _code in plan.introduced}          # baris yang perbaikannya memunculkan masalah baru
-        for change in plan.changes[:MAX_ROWS]:
+        shown_changes = plan.changes[:MAX_ROWS]
+        for change in shown_changes:
             before, after = change_columns(change)
             tree.insert("", "end", iid=str(change.index), tags=(sq.WARNING,) if change.index in flagged else (),
                         values=(change.index + 1, before, after, "; ".join(change.notes)))
+        all_count = fmt_int(len(plan.changes))
+        notice = limit_notice(len(shown_changes), len(plan.changes), "perubahan",
+                              f"Tombol Terapkan menerapkan SEMUA {all_count} perubahan, bukan hanya yang tampil.")
         self.preview_info.configure(
-            text="Pratinjau: belum ada yang diubah. " + plan.summary(),
-            text_color=Theme.WARN_TEXT if not plan.is_safe else Theme.TEXT)
+            text="Pratinjau: belum ada yang diubah. " + plan.summary() + (("\n" + notice) if notice else ""),
+            text_color=Theme.WARN_TEXT if (notice or not plan.is_safe) else Theme.TEXT)
         self.btn_apply.configure(text=f"✅ Terapkan {len(plan.changes)} perubahan…")
 
     def _back_to_report(self) -> None:
@@ -265,6 +284,9 @@ class QualityReportDialog(ctk.CTkToplevel):
         question = (f"Terapkan {len(plan.changes)} perubahan ke subtitle?\n\n"
                     "• Backup dibuat otomatis sebelum diterapkan.\n"
                     "• Bisa dibatalkan: tombol \"Undo perubahan\" di sini atau ↶ Undo di editor.")
+        if len(plan.changes) > MAX_ROWS:
+            question += (f"\n\n⚠ Pratinjau hanya menampilkan {fmt_int(MAX_ROWS)} dari {fmt_int(len(plan.changes))} "
+                         f"perubahan; SEMUA {fmt_int(len(plan.changes))} perubahan akan diterapkan.")
         if not plan.is_safe:
             question += (f"\n\n⚠ {len(plan.introduced)} masalah BARU akan muncul (mis. CPS naik karena akhir baris "
                          "dipendekkan demi menghilangkan overlap). Lihat kolom pratinjau.")
@@ -278,10 +300,22 @@ class QualityReportDialog(ctk.CTkToplevel):
             return
         except Exception as exc:  # noqa: BLE001
             log.exception("Penerapan perbaikan kualitas gagal")
-            messagebox.showerror("KaptionPro", f"Perbaikan gagal diterapkan: {exc}", parent=self)
-            self.analyze("Perbaikan gagal diterapkan; subtitle tidak diubah oleh dialog ini.")
+            verdict = self._verdict_after_failed_apply(plan)
+            messagebox.showerror("KaptionPro", f"Perbaikan gagal diterapkan: {exc}\n\n{verdict}", parent=self)
+            self.analyze(f"Perbaikan gagal diterapkan. {verdict}")
             return
         self._after_apply(count)
+
+    def _verdict_after_failed_apply(self, plan: qf.FixPlan) -> str:
+        """Kalimat JUJUR soal kondisi subtitle setelah penerapan gagal: dibandingkan dengan rencana, bukan diasumsikan."""
+        try:
+            unchanged = plan.matches(self._segments())
+        except Exception:  # noqa: BLE001
+            log.exception("Verifikasi kondisi subtitle setelah penerapan gagal ikut gagal")
+            return "⚠ Kondisi subtitle tidak bisa diverifikasi; periksa hasilnya dan gunakan ↶ Undo di editor bila perlu."
+        if unchanged:
+            return "Subtitle TIDAK berubah (sudah diverifikasi sama dengan sebelum perbaikan)."
+        return "⚠ Subtitle berbeda dari sebelum perbaikan. Periksa hasilnya dan gunakan ↶ Undo di editor bila perlu."
 
     def _after_apply(self, count: int) -> None:
         """Tampilkan laporan terbaru TANPA mereset alur (supaya Undo tetap tersedia)."""
@@ -297,6 +331,13 @@ class QualityReportDialog(ctk.CTkToplevel):
             return
         try:
             restored = self.flow.undo(self._segments, self._undo_fn)
+        except UndoMismatchError as exc:
+            messagebox.showwarning(
+                "KaptionPro", f"Undo tidak dijalankan: {exc}.\n\nSubtitle tidak diubah. Batalkan perubahan lain itu dulu "
+                              "dengan ↶ Undo di editor, atau klik Analisis ulang.", parent=self)
+            self.analyze("Undo tidak dijalankan: ada perubahan lain sesudah perbaikan. "
+                         "Laporan di atas adalah kondisi sebenarnya.")
+            return
         except Exception as exc:  # noqa: BLE001
             log.exception("Undo perbaikan kualitas gagal")
             messagebox.showerror("KaptionPro", f"Undo gagal: {exc}", parent=self)

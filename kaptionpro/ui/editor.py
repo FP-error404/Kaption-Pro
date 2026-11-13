@@ -4,13 +4,27 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from typing import Callable
+from collections import Counter
+from contextlib import contextmanager
+from typing import Callable, NamedTuple
 
-from ..config import Theme, ctk
+from ..config import Theme, ctk, log
+from ..core import quality_fix as qf
+from ..core.quality_flow import QUALITY_FIX_LABEL, ApplyVerificationError, StalePlanError, UndoMismatchError
 from ..core.utils import srt_time
+from ..core.word_integrity import WordIntegrityError, WordRepair, enforce_word_integrity, find_word_violations
 from ..models import SubtitleIO, SubtitleSegment, Word, retime_words, sanitize_word_list
 from .components import small_button
 from .dialogs import BulkEditDialog, SearchReplaceDialog, ask_text
+from .quality_dialog import QualityReportDialog
+
+
+class HistoryEntry(NamedTuple):
+    """Satu langkah riwayat Undo/Redo (v1.9.19): snapshot subtitle SEBELUM operasi + identitas operasinya."""
+
+    label: str            # penanda operasi, mis. "before-quality-fix", "bulk-upper", "add-line"
+    frozen: list          # snapshot ringkas (lihat _freeze)
+    op_id: int            # nomor unik operasi; tetap sama saat langkah berpindah antara Undo dan Redo
 
 
 class SubtitleEditorPanel(ctk.CTkFrame):
@@ -27,11 +41,18 @@ class SubtitleEditorPanel(ctk.CTkFrame):
     """
 
     MAX_UNDO = 100
+    _op_seq = 0                # penghitung nomor operasi riwayat (naik terus, tidak pernah dipakai ulang)
+    _quality_receipt = None    # nomor langkah Undo milik Quality Fix terakhir yang diterapkan lewat dialog
+    SYNC_ATTEMPTS = 3          # percobaan ulang tiap langkah sinkronisasi setelah rollback (v1.9.20)
+    on_resync = None           # jalur darurat pemilik data (workspace) bila on_changed gagal terus setelah rollback
+    sync_degraded = False      # True bila rollback sudah memulihkan data TETAPI sinkronisasi ke luar belum berhasil
+    last_word_repair: WordRepair | None = None     # hasil pemulihan word timestamp pada operasi terakhir
     BIG = 1500                 # di atas ini daftar diisi bertahap
     CHUNK = 400
     TIME_EPS = 0.0006          # toleransi pembulatan milidetik (entri waktu hanya 3 desimal)
     # Menu "Alat" di toolbar (label, nama method): aksi yang jarang dipakai dikelompokkan agar toolbar cukup 1 baris.
-    TOOLS_MENU = (("📂 Import subtitle…", "_import_srt"), ("⏱ Shift semua…", "_shift_all"),
+    TOOLS_MENU = (("📋 Laporan kualitas…", "_open_quality_report"),
+                  ("📂 Import subtitle…", "_import_srt"), ("⏱ Shift semua…", "_shift_all"),
                   ("🧰 Edit massal (Bulk)…", "_bulk_edit"), ("✂ Split baris", "_split_selected"),
                   ("🔗 Merge baris", "_merge_selected"))
     FILTERS = {"all": "Semua", "issues": "Bermasalah", "overlap": "Overlap", "short": "Pendek",
@@ -40,14 +61,16 @@ class SubtitleEditorPanel(ctk.CTkFrame):
     def __init__(self, master, on_changed: Callable[[list[SubtitleSegment]], None],
                  on_select: Callable[[SubtitleSegment], None],
                  get_playhead: Callable[[], float],
-                 before_op: Callable[[str], None] | None = None) -> None:
+                 before_op: Callable[[str], None] | None = None,
+                 on_resync: Callable[[list[SubtitleSegment]], bool] | None = None) -> None:
         super().__init__(master, fg_color=Theme.SURFACE, corner_radius=Theme.RADIUS, border_width=1,
                          border_color=Theme.BORDER)
         self.on_changed, self.on_select, self.get_playhead = on_changed, on_select, get_playhead
+        self.on_resync = on_resync
         self.before_op = before_op or (lambda _reason: None)     # mis. membuat backup sebelum operasi besar
         self.segments: list[SubtitleSegment] = []
-        self._undo: list[list] = []
-        self._redo: list[list] = []
+        self._undo: list[HistoryEntry] = []
+        self._redo: list[HistoryEntry] = []
         self._current: SubtitleSegment | None = None
         self._suppress_select = False
         self._issues: dict[int, str] = {}
@@ -56,6 +79,7 @@ class SubtitleEditorPanel(ctk.CTkFrame):
         self._search_id = None
         self._fill_gen = 0
         self.filter_key = "all"
+        self._quality_dialog = None                          # dialog Laporan Kualitas yang sedang terbuka (satu saja)
 
         self.grid_rowconfigure(3, weight=1, minsize=80)      # tabel subtitle tidak boleh menyusut jadi hanya header
         self.grid_columnconfigure(0, weight=1)
@@ -204,13 +228,28 @@ class SubtitleEditorPanel(ctk.CTkFrame):
         self._clear_form()
         self._refresh()
 
-    def replace_all(self, segments: list[SubtitleSegment], push_undo: bool = True) -> None:
-        if push_undo:
-            self._push_undo()
-        self.segments[:] = SubtitleIO.normalize(segments)[0]
-        self._clear_form()
-        self._refresh()
-        self.on_changed(self.segments)
+    def replace_all(self, segments: list[SubtitleSegment], push_undo: bool = True, label: str = "replace-all",
+                    expect: Counter | None = None) -> int | None:
+        """
+        Ganti seluruh subtitle sebagai SATU transaksi (semua-atau-tidak-sama-sekali): bila langkah mana pun gagal
+        (normalisasi, verifikasi `expect`, gambar ulang, on_changed), isi subtitle, riwayat Undo dan Redo dikembalikan persis
+        seperti semula dan galat diteruskan -- tidak ada entri Undo hantu, tidak ada subtitle setengah berubah.
+        `expect` (opsional): Counter sidik jari hasil yang diharapkan; beda -> ApplyVerificationError + rollback.
+        Mengembalikan nomor operasi riwayat (None bila push_undo=False).
+        """
+        prepared = SubtitleIO.normalize(segments)[0]          # tahap siap: boleh gagal, belum ada yang berubah
+        op_id = None
+        with self._transaction():
+            if push_undo:
+                op_id = self._push_undo(label)
+            self.segments[:] = prepared
+            if expect is not None and self._content_counter(self.segments) != expect:
+                raise ApplyVerificationError("hasil penerapan berbeda dari rencana yang dikonfirmasi")
+            self._seal_content(self.segments)
+            self._clear_form()
+            self._refresh()
+            self._notify_changed()
+        return op_id
 
     def focus_search(self) -> None:
         self.search_entry.focus_set()
@@ -253,33 +292,163 @@ class SubtitleEditorPanel(ctk.CTkFrame):
         return [(s.start, s.end, s.text, tuple((w.start, w.end, w.text) for w in s.words)) for s in segments]
 
     @staticmethod
+    def _content_counter(rows) -> Counter:
+        """Hitungan (awal, akhir, teks) TANPA urutan; waktu dibandingkan sebagai float agar 2 dan 2.0 dianggap sama."""
+        return Counter((float(r.start), float(r.end), str(r.text)) for r in rows)
+
+    @staticmethod
     def _thaw(frozen: list) -> list[SubtitleSegment]:
         return [SubtitleSegment(a, b, c, [Word(x, y, z) for x, y, z in w]) for a, b, c, w in frozen]
 
-    def _push_undo(self) -> None:
-        self._undo.append(self._freeze(self.segments))
+    def _push_undo(self, label: str = "edit") -> int:
+        """Catat snapshot SEBELUM operasi `label`; mengembalikan nomor operasi uniknya."""
+        self._op_seq += 1
+        self._undo.append(HistoryEntry(label, self._freeze(self.segments), self._op_seq))
         self._redo.clear()
         if len(self._undo) > self.MAX_UNDO:
             self._undo.pop(0)
+        return self._op_seq
 
-    def undo(self) -> None:
-        if not self._undo:
-            return
-        self._redo.append(self._freeze(self.segments))
-        self.segments[:] = self._thaw(self._undo.pop())
-        self._after_history()
+    # ---- transaksi: semua-atau-tidak-sama-sekali untuk operasi yang mengganti isi subtitle ----
+    def _begin(self) -> tuple:
+        return self._freeze(self.segments), list(self.segments), list(self._undo), list(self._redo)
 
-    def redo(self) -> None:
-        if not self._redo:
-            return
-        self._undo.append(self._freeze(self.segments))
-        self.segments[:] = self._thaw(self._redo.pop())
-        self._after_history()
+    def _restore(self, state: tuple) -> None:
+        """Kembalikan isi subtitle + riwayat Undo/Redo ke `state`. UI hanya disegarkan bila isinya memang perlu dikembalikan."""
+        frozen, objects, undo, redo = state
+        self._undo[:] = undo
+        self._redo[:] = redo
+        try:
+            current = self._freeze(self.segments)
+        except Exception:  # noqa: BLE001
+            current = None                                      # isi rusak di tengah operasi: pasti harus dipulihkan
+        if current != frozen:
+            self.segments[:] = self._thaw(frozen)               # isi sempat berubah (mis. edit massal setengah jalan)
+        elif len(objects) == len(self.segments) and all(a is b for a, b in zip(objects, self.segments)):
+            return                                              # tidak ada yang tersentuh
+        else:
+            self.segments[:] = objects                          # isi sama, objek diganti: pulihkan objek aslinya
+        self._resync_after_rollback()
+
+    def _notify_changed(self) -> None:
+        """Beri tahu pemilik data (workspace: tampilan, autosave, status simpan). Sukses = sinkronisasi pulih."""
+        self.on_changed(self.segments)
+        self.sync_degraded = False
+
+    def _attempt(self, name: str, step: Callable[[], object]) -> bool:
+        """Jalankan `step` sampai SYNC_ATTEMPTS kali; True bila salah satu percobaan berhasil."""
+        for attempt in range(1, self.SYNC_ATTEMPTS + 1):
+            try:
+                step()
+                return True
+            except Exception:  # noqa: BLE001
+                log.warning("Sinkronisasi '%s' setelah rollback gagal (percobaan %d/%d)", name, attempt, self.SYNC_ATTEMPTS,
+                            exc_info=attempt == self.SYNC_ATTEMPTS)
+        return False
+
+    def _resync_after_rollback(self) -> bool:
+        """
+        Setelah rollback, isi memori sudah benar; pastikan tampilan, workspace, autosave dan status simpan IKUT benar.
+        Tiap langkah dicoba ulang; bila on_changed tetap gagal, jalur darurat `on_resync` dipakai; bila itu pun gagal
+        pengguna DIBERI TAHU (bukan hanya dicatat di log) dan `sync_degraded` menyala sampai sinkronisasi berhasil lagi.
+        """
+        failed: list[str] = []
+        for name, step in (("form", self._clear_form), ("tabel", self._refresh)):
+            if not self._attempt(name, step):
+                failed.append(name)
+        if not self._attempt("on_changed", self._notify_changed) and not self._emergency_resync():
+            failed.append("workspace/autosave")
+        self.sync_degraded = bool(failed)
+        if failed:
+            log.error("Rollback selesai (data dipulihkan) tetapi sinkronisasi belum pulih: %s", ", ".join(failed))
+            self._warn_sync_failed(failed)
+        return not failed
+
+    def _emergency_resync(self) -> bool:
+        hook = self.on_resync
+        if hook is None:
+            return False
+        try:
+            ok = bool(hook(self.segments))
+        except Exception:  # noqa: BLE001
+            log.exception("Jalur darurat sinkronisasi gagal")
+            return False
+        if ok:
+            self.sync_degraded = False
+        return ok
+
+    def _warn_sync_failed(self, failed: list[str]) -> None:
+        try:
+            messagebox.showerror(
+                "KaptionPro", "Perubahan terakhir gagal dan sudah DIBATALKAN (isi subtitle dikembalikan seperti semula), "
+                              f"tetapi {', '.join(failed)} belum bisa disinkronkan.\n\nSimpan project (atau ekspor SRT) "
+                              "sekarang lalu buka ulang project bila tampilan terlihat tidak sesuai.")
+        except Exception:  # noqa: BLE001
+            log.exception("Gagal menampilkan peringatan sinkronisasi")
+
+    def _seal_content(self, segments) -> None:
+        """
+        Dipanggil DI DALAM transaksi sebelum tampilan/penyimpanan diberi tahu: tidak boleh ada word timestamp di luar
+        rentang barisnya setelah timing berubah. Dipulihkan (dijepit/dibuang); sisa pelanggaran -> galat + rollback.
+        """
+        repair = enforce_word_integrity(segments)
+        leftover = find_word_violations(segments)
+        if leftover:
+            raise WordIntegrityError(f"{len(leftover)} pelanggaran word timestamp tersisa: {leftover[0].detail}")
+        self.last_word_repair = repair
+        if repair.total:
+            log.info("Integritas word timestamp: %d baris dipulihkan (dijepit %d, dibuang %d)",
+                     repair.total, len(repair.clamped), len(repair.dropped))
+
+    @contextmanager
+    def _transaction(self):
+        state = self._begin()
+        try:
+            yield state
+        except BaseException:
+            self._restore(state)
+            raise
+
+    def undo(self) -> bool:
+        return self._step_history(self._undo, self._redo)
+
+    def redo(self) -> bool:
+        return self._step_history(self._redo, self._undo)
+
+    def _step_history(self, source: list[HistoryEntry], target: list[HistoryEntry]) -> bool:
+        """Satu langkah Undo/Redo sebagai transaksi. True bila ada langkah yang dijalankan."""
+        if not source:
+            return False
+        entry = source[-1]
+        restored = self._thaw(entry.frozen)                     # siapkan dulu; gagal di sini -> belum ada yang berubah
+        with self._transaction():
+            source.pop()
+            target.append(HistoryEntry(entry.label, self._freeze(self.segments), entry.op_id))
+            self.segments[:] = restored
+            self._after_history()
+        return True
+
+    def peek_undo(self) -> HistoryEntry | None:
+        """Langkah yang akan dibatalkan Undo berikutnya (None bila riwayat kosong)."""
+        return self._undo[-1] if self._undo else None
+
+    def undo_operation(self, label: str, op_id: int | None = None) -> None:
+        """
+        Undo TERARAH: hanya membatalkan bila langkah Undo teratas adalah operasi `label` (dan bernomor `op_id` bila
+        diberikan); selain itu UndoMismatchError dan TIDAK ada yang berubah.
+        """
+        top = self.peek_undo()
+        if top is None:
+            raise UndoMismatchError("riwayat Undo kosong; tidak ada yang bisa dibatalkan")
+        if top.label != label or (op_id is not None and top.op_id != op_id):
+            raise UndoMismatchError(f"ada perubahan lain sesudah operasi ini (langkah Undo teratas: '{top.label}', "
+                                    f"bukan '{label}'); tidak ada yang dibatalkan")
+        self.undo()
 
     def _after_history(self) -> None:
         self._clear_form()
         self._refresh()
-        self.on_changed(self.segments)
+        self._notify_changed()
 
     # ------------------------------------------------------------------ daftar (Treeview)
     def _index_of(self, seg: SubtitleSegment) -> int:
@@ -498,23 +667,26 @@ class SubtitleEditorPanel(ctk.CTkFrame):
         times_changed = abs(start - seg.start) > self.TIME_EPS or abs(end - seg.end) > self.TIME_EPS
         text_changed = text != seg.text.strip()
         if times_changed or text_changed:
-            self._push_undo()
-            before = self._index_of(seg)
-            # Karaoke: petakan ulang kata ke teks baru memakai amplop waktu bicara lama (jeda ucapan terjaga).
+            # Karaoke: petakan ulang kata ke teks baru memakai amplop waktu bicara lama (jeda ucapan terjaga). Murni: dihitung
+            # SEBELUM transaksi, jadi kegagalan di sini tidak meninggalkan jejak apa pun.
             new_words = retime_words(text, seg.words, seg.start, seg.end, start, end) if seg.words else []
-            if times_changed:
-                seg.start, seg.end = start, end
-            if text_changed:
-                seg.text = text
-            seg.words = new_words
-            self.segments.sort(key=lambda s: s.start)
-            after = next((k for k, s in enumerate(self.segments) if s is seg), -1)
-            if after == before and not self._filter_active() and select_after is None:
-                self._update_rows_around(after)                      # inkremental: O(1) per edit
-            else:
-                self._refresh(select=[select_after or seg])
-            self.dur_label.configure(text=f"{seg.duration:.2f}s · {len(seg.text)} chars")
-            self.on_changed(self.segments)
+            with self._transaction():
+                self._push_undo("apply")
+                before = self._index_of(seg)
+                if times_changed:
+                    seg.start, seg.end = start, end
+                if text_changed:
+                    seg.text = text
+                seg.words = new_words
+                self._seal_content([seg])
+                self.segments.sort(key=lambda s: s.start)
+                after = next((k for k, s in enumerate(self.segments) if s is seg), -1)
+                if after == before and not self._filter_active() and select_after is None:
+                    self._update_rows_around(after)                  # inkremental: O(1) per edit
+                else:
+                    self._refresh(select=[select_after or seg])
+                self.dur_label.configure(text=f"{seg.duration:.2f}s · {len(seg.text)} chars")
+                self._notify_changed()
         if go_next:
             idx = self._index_of(seg) + 1
             if idx < len(self.segments):
@@ -530,13 +702,14 @@ class SubtitleEditorPanel(ctk.CTkFrame):
             anchor = self._current.end + 0.1
         else:
             anchor = max(self.get_playhead(), (self.segments[-1].end + 0.1) if self.segments else 0.0)
-        self._push_undo()
         seg = SubtitleSegment(round(anchor, 3), round(anchor + 2.0, 3), "Teks baru")
-        self.segments.append(seg)
-        self.segments.sort(key=lambda s: s.start)
-        self._refresh(select=[seg])
-        self._populate(seg)
-        self.on_changed(self.segments)
+        with self._transaction():
+            self._push_undo("add-line")
+            self.segments.append(seg)
+            self.segments.sort(key=lambda s: s.start)
+            self._refresh(select=[seg])
+            self._notify_changed()
+        self._populate(seg)                       # navigasi/fokus sesudah commit: bukan bagian transaksi data
         self.on_select(seg)
         self.text_box.focus_set()
         self.text_box.tag_add("sel", "1.0", "end-1c")
@@ -554,14 +727,15 @@ class SubtitleEditorPanel(ctk.CTkFrame):
         idxs = sorted(self._selected_indices(), reverse=True)
         if not idxs:
             return
-        self._push_undo()
-        for i in idxs:
-            del self.segments[i]
-        self._clear_form()
-        self._refresh()
+        with self._transaction():
+            self._push_undo("delete-selected")
+            for i in idxs:
+                del self.segments[i]
+            self._clear_form()
+            self._refresh()
+            self._notify_changed()
         if self.segments:
             self.select_segment(self.segments[min(idxs[-1], len(self.segments) - 1)])
-        self.on_changed(self.segments)
 
     def _shift_all(self) -> None:
         if not self.segments:
@@ -585,21 +759,27 @@ class SubtitleEditorPanel(ctk.CTkFrame):
         self._run_bulk(op, p1, p2, idxs, "bulk-" + op)
 
     def _run_bulk(self, op: str, p1: str, p2: str, idxs: list[int], reason: str) -> bool:
-        """Jalankan edit massal: backup -> undo snapshot -> operasi -> (batalkan snapshot bila gagal/0 perubahan)."""
+        """Jalankan edit massal sebagai transaksi: backup -> snapshot Undo -> operasi -> (rollback bila gagal/0 perubahan)."""
         self.before_op(reason)
-        self._push_undo()
-        changed, err = SubtitleIO.bulk_edit(self.segments, idxs, op, p1, p2)
-        if err or changed == 0:
-            self._undo.pop()
-            if err:
-                messagebox.showerror("KaptionPro", err)
+        failure: str | None = None
+        with self._transaction() as state:
+            self._push_undo(reason)
+            changed, err = SubtitleIO.bulk_edit(self.segments, idxs, op, p1, p2)
+            if err or changed == 0:
+                self._restore(state)                  # batalkan snapshot (dan isi, bila bulk_edit sempat menyentuhnya)
+                failure = err or ""
+            else:
+                self.segments.sort(key=lambda s: s.start)
+                self._seal_content(self.segments)
+                self._clear_form()
+                self._refresh()
+                self._notify_changed()
+        if failure is not None:
+            if failure:
+                messagebox.showerror("KaptionPro", failure)
             else:
                 messagebox.showinfo("KaptionPro", "Tidak ada baris yang berubah.")
             return False
-        self.segments.sort(key=lambda s: s.start)
-        self._clear_form()
-        self._refresh()
-        self.on_changed(self.segments)
         return True
 
     def _import_srt(self) -> None:
@@ -627,11 +807,13 @@ class SubtitleEditorPanel(ctk.CTkFrame):
 
     def _apply_search_result(self, new_segments: list[SubtitleSegment]) -> None:
         self.before_op("search-replace")
-        self._push_undo()
-        self.segments[:] = new_segments
-        self._clear_form()
-        self._refresh()
-        self.on_changed(self.segments)
+        with self._transaction():
+            self._push_undo("search-replace")
+            self.segments[:] = new_segments
+            self._seal_content(self.segments)
+            self._clear_form()
+            self._refresh()
+            self._notify_changed()
 
     def _highlight_indices(self, idxs: list[int]) -> None:
         self._select_tree([i for i in idxs if 0 <= i < len(self.segments)])
@@ -669,15 +851,17 @@ class SubtitleEditorPanel(ctk.CTkFrame):
         else:
             mid_time = seg.start + seg.duration * rel
         mid_time = min(max(mid_time, seg.start + 0.05), seg.end - 0.05)
-        self._push_undo()
         left = SubtitleSegment(seg.start, round(mid_time, 3), " ".join(words[:n_left]),
                                [Word(w.start, w.end, w.text) for w in real[:n_left]] if real else [])
         right = SubtitleSegment(round(mid_time, 3), seg.end, " ".join(words[n_left:]),
                                 [Word(w.start, w.end, w.text) for w in real[n_left:]] if real else [])
-        self.segments[i:i + 1] = [left, right]
-        self._refresh(select=[left])
+        with self._transaction():
+            self._push_undo("split-selected")
+            self.segments[i:i + 1] = [left, right]
+            self._seal_content([left, right])
+            self._refresh(select=[left])
+            self._notify_changed()
         self._populate(left)
-        self.on_changed(self.segments)
         self._current = left
 
     def _merge_selected(self) -> None:
@@ -689,16 +873,18 @@ class SubtitleEditorPanel(ctk.CTkFrame):
             messagebox.showinfo("KaptionPro", "Baris yang dipilih harus berurutan.")
             return
         group = [self.segments[i] for i in idxs]
-        self._push_undo()
         merged_text = " ".join(s.text.strip() for s in group if s.text.strip())
         reals = [self._real_words(s) for s in group]
         words = [Word(w.start, w.end, w.text) for r in reals if r for w in r] if all(reals) else []
         merged = SubtitleSegment(group[0].start, group[-1].end, merged_text, words)
-        self.segments[idxs[0]:idxs[-1] + 1] = [merged]
-        self._refresh(select=[merged])
+        with self._transaction():
+            self._push_undo("merge-selected")
+            self.segments[idxs[0]:idxs[-1] + 1] = [merged]
+            self._seal_content([merged])
+            self._refresh(select=[merged])
+            self._notify_changed()
         self._populate(merged)
         self._current = merged
-        self.on_changed(self.segments)
 
     def _auto_fix(self) -> None:
         if not self.segments:
@@ -713,3 +899,63 @@ class SubtitleEditorPanel(ctk.CTkFrame):
             return
         self.before_op("before-autofix")
         self.replace_all(fixed)
+
+    # ------------------------------------------------------------------ laporan kualitas (v1.9.18)
+    def _open_quality_report(self) -> None:
+        """Buka dialog Laporan Kualitas (daftar error/peringatan per baris + Perbaiki otomatis yang aman)."""
+        if not self.segments:
+            messagebox.showinfo("KaptionPro", "Belum ada subtitle untuk diperiksa.")
+            return
+        if self._form_dirty() and not self._apply():          # edit belum disimpan ikut diperiksa; form tak valid -> berhenti
+            return
+        dialog = self._quality_dialog
+        try:
+            alive = dialog is not None and bool(dialog.winfo_exists())
+        except tk.TclError:
+            alive = False
+        if alive:
+            dialog.lift()
+            return
+        self._quality_dialog = QualityReportDialog(self, get_segments=lambda: self.segments,
+                                                   apply_plan=self._apply_quality_plan, undo=self._undo_quality_fix,
+                                                   jump_to=self._jump_to_index)
+
+    def _jump_to_index(self, index: int) -> None:
+        if 0 <= index < len(self.segments):
+            seg = self.segments[index]
+            self.select_segment(seg)
+            self.on_select(seg)
+
+    def _segments_from_plan(self, plan: qf.FixPlan) -> list[SubtitleSegment]:
+        """Daftar baru dari rencana: baris tak berubah disalin apa adanya; word timestamp hanya dibuang bila WAKTU berubah."""
+        by_index = {change.index: change for change in plan.changes}
+        out: list[SubtitleSegment] = []
+        for i, seg in enumerate(self.segments):
+            change = by_index.get(i)
+            keep_words = change is None or not change.timing_changed
+            words = [Word(w.start, w.end, w.text) for w in seg.words] if keep_words else []
+            if change is None:
+                out.append(SubtitleSegment(seg.start, seg.end, seg.text, words))
+            else:
+                out.append(SubtitleSegment(float(change.after.start), float(change.after.end), change.after.text, words))
+        return out
+
+    def _apply_quality_plan(self, plan: qf.FixPlan) -> int | None:
+        """
+        Dipanggil QualityFlow.apply SETELAH pratinjau dan konfirmasi pengguna: backup lalu SATU langkah Undo bertanda
+        "before-quality-fix" (replace_all mendorong satu snapshot). Menolak rencana basi sebagai pertahanan kedua.
+        Transaksional: hasil diverifikasi terhadap rencana; gagal di tahap mana pun -> subtitle dan riwayat Undo/Redo
+        dikembalikan persis seperti semula. Mengembalikan nomor langkah Undo-nya (dipakai _undo_quality_fix).
+        """
+        if not plan.matches(self.segments):
+            raise StalePlanError("subtitle berubah sejak pratinjau")
+        new_segments = self._segments_from_plan(plan)
+        expected = self._content_counter(plan.rows_after)
+        self.before_op(QUALITY_FIX_LABEL)
+        op_id = self.replace_all(new_segments, label=QUALITY_FIX_LABEL, expect=expected)
+        self._quality_receipt = op_id
+        return op_id
+
+    def _undo_quality_fix(self) -> None:
+        """Undo milik dialog: hanya membatalkan Quality Fix terakhir; ada perubahan lain sesudahnya -> UndoMismatchError."""
+        self.undo_operation(QUALITY_FIX_LABEL, self._quality_receipt)

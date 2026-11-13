@@ -27,7 +27,20 @@ from ..config import (
 )
 from ..core.storage import BackupInfo
 from ..core.jobs import JobTracker
-from ..core.layout import rebalanced_side_height, side_panel_height, side_panel_visible
+from ..core.layout import (
+    SIDE_FIELD_LABEL_H,
+    SIDE_FIELD_LABEL_PAD,
+    SIDE_HEADER_LABEL_H,
+    SIDE_HEADER_PAD,
+    SIDE_MENU_H,
+    SIDE_MENU_PAD,
+    SIDE_PRESET_BTN_H,
+    SIDE_PRESET_PAD,
+    SIDE_RULE_PAD,
+    rebalanced_side_height,
+    side_panel_height,
+    side_panel_visible,
+)
 from ..core.privacy import ACK_KEY, is_acknowledged, with_acknowledged
 from ..core.utils import CancelledError, fmt_clock, normalize_hex, safe_filename
 from ..models import (
@@ -429,36 +442,38 @@ class SidePanel(ctk.CTkScrollableFrame):
         self.on_translator_changed = on_translator_changed
         self._preset_buttons: dict[str, ctk.CTkButton] = {}
 
-        section_header(self, "LANGUAGE PRESETS")
+        # Ukuran/jarak dari core/layout.py (SIDE_*): dihitung agar menu Whisper model tampak utuh di panel terpendek
+        # yang masih ditampilkan (layout.side_whisper_bottom; dijaga tes).
+        section_header(self, "LANGUAGE PRESETS", SIDE_HEADER_LABEL_H, SIDE_HEADER_PAD, SIDE_RULE_PAD)
         for key, preset in LANGUAGE_PRESETS.items():
-            btn = ctk.CTkButton(self, text=preset.label, height=34, corner_radius=Theme.RADIUS, anchor="w",
+            btn = ctk.CTkButton(self, text=preset.label, height=SIDE_PRESET_BTN_H, corner_radius=Theme.RADIUS, anchor="w",
                                 font=Theme.font(13, "bold"), command=lambda k=key: self._select_preset(k))
-            btn.pack(fill="x", padx=14, pady=3)
+            btn.pack(fill="x", padx=14, pady=SIDE_PRESET_PAD)
             self._preset_buttons[key] = btn
 
-        ctk.CTkLabel(self, text="Whisper model", text_color=Theme.TEXT_MUTED, anchor="w",
-                     font=Theme.font(11)).pack(fill="x", padx=14, pady=(6, 0))
+        ctk.CTkLabel(self, text="Whisper model", text_color=Theme.TEXT_MUTED, anchor="w", height=SIDE_FIELD_LABEL_H,
+                     font=Theme.font(11)).pack(fill="x", padx=14, pady=SIDE_FIELD_LABEL_PAD)
         self.model_var = ctk.StringVar(value="small")
         self.model_menu = ctk.CTkOptionMenu(
-            self, values=WHISPER_MODELS, variable=self.model_var,
+            self, values=WHISPER_MODELS, variable=self.model_var, height=SIDE_MENU_H,
             fg_color=Theme.SURFACE_2, button_color=Theme.GOLD_DIM, button_hover_color=Theme.GOLD,
             text_color=Theme.TEXT, font=Theme.font(12),
             command=lambda v: self.on_model_changed(v))
-        self.model_menu.pack(fill="x", padx=14, pady=(0, 4))
+        self.model_menu.pack(fill="x", padx=14, pady=SIDE_MENU_PAD)
 
-        ctk.CTkLabel(self, text="Penerjemah", text_color=Theme.TEXT_MUTED, anchor="w",
-                     font=Theme.font(11)).pack(fill="x", padx=14, pady=(4, 0))
+        ctk.CTkLabel(self, text="Penerjemah", text_color=Theme.TEXT_MUTED, anchor="w", height=SIDE_FIELD_LABEL_H,
+                     font=Theme.font(11)).pack(fill="x", padx=14, pady=SIDE_FIELD_LABEL_PAD)
         self.translator_var = ctk.StringVar(value=TRANSLATORS["google"])
         self.translator_menu = ctk.CTkOptionMenu(
-            self, values=list(TRANSLATORS.values()), variable=self.translator_var,
+            self, values=list(TRANSLATORS.values()), variable=self.translator_var, height=SIDE_MENU_H,
             fg_color=Theme.SURFACE_2, button_color=Theme.GOLD_DIM, button_hover_color=Theme.GOLD,
             text_color=Theme.TEXT, font=Theme.font(12), command=self._on_translator_menu)
-        self.translator_menu.pack(fill="x", padx=14, pady=(0, 4))
+        self.translator_menu.pack(fill="x", padx=14, pady=SIDE_MENU_PAD)
 
         self.generate_btn = gold_button(self, "✨  Generate Subtitles (AI)", on_generate, filled=False, height=36)
         self.generate_btn.pack(fill="x", padx=14, pady=(6, 2))
 
-        section_header(self, "TEXT STYLES")
+        section_header(self, "TEXT STYLES", SIDE_HEADER_LABEL_H, SIDE_HEADER_PAD, SIDE_RULE_PAD)
         self.style_var = ctk.StringVar(value="karaoke")
         for key, label in TEXT_STYLES.items():
             ctk.CTkRadioButton(self, text=label, value=key, variable=self.style_var,
@@ -750,7 +765,8 @@ class WorkspaceScreen(ctk.CTkFrame):
         self.editor = SubtitleEditorPanel(self, on_changed=self._on_segments_changed,
                                           on_select=lambda seg: self.seek_time(seg.start, "editor"),
                                           get_playhead=lambda: self.video._pos,
-                                          before_op=self._backup)
+                                          before_op=self._backup,
+                                          on_resync=self._resync_after_editor_rollback)
         self.segments = self.editor.segments
         self.video.set_volume_ui(int(app.settings.get("volume", 80)), bool(app.settings.get("muted", False)))
 
@@ -1086,15 +1102,71 @@ class WorkspaceScreen(ctk.CTkFrame):
         else:
             self.video.show_caption("" if self.segments else None)
 
+    VIEW_SYNC_ATTEMPTS = 3
+
     def _on_segments_changed(self, segments: list[SubtitleSegment]) -> None:
+        """
+        v1.9.20: urutan KRITIS dulu (kepemilikan data, status belum-tersimpan, autosave terjadwal) sehingga kegagalan
+        tampilan tidak pernah membuat data kotor tanpa autosave. Bila bagian kritis gagal, galat diteruskan ke editor
+        (rollback + pemulihan). Tampilan menyusul dan tiap langkahnya terisolasi, dengan percobaan ulang.
+        """
         self.segments = segments
         self._dirty = True
-        self._update_save_indicator()
-        self._refresh_views()
-        self.seek_time(self.video._pos, "refresh")
         self._schedule_autosave()
-        self._schedule_vlc_subs()
-        self.set_status(f"{len(segments)} lines")
+        self._sync_views(len(segments))
+
+    def _sync_views(self, count: int, attempt: int = 1) -> bool:
+        """Segarkan indikator simpan, timeline, pemutar, pratinjau VLC, status; satu langkah gagal tak menghentikan lainnya."""
+        failed: list[str] = []
+        for name, step in (("indikator simpan", self._update_save_indicator), ("timeline", self._refresh_views),
+                           ("posisi pemutar", lambda: self.seek_time(self.video._pos, "refresh")),
+                           ("pratinjau VLC", self._schedule_vlc_subs)):
+            try:
+                step()
+            except Exception:  # noqa: BLE001
+                log.exception("Sinkronisasi tampilan gagal: %s (percobaan %d)", name, attempt)
+                failed.append(name)
+        try:
+            if not failed:
+                self.set_status(f"{count} lines")
+            else:
+                self.set_status(f"⚠ Tampilan belum sinkron ({', '.join(failed)}); data aman, mencoba lagi…"
+                                if attempt < self.VIEW_SYNC_ATTEMPTS else
+                                f"⚠ Tampilan belum sinkron ({', '.join(failed)}); data aman dan akan tersimpan otomatis")
+        except Exception:  # noqa: BLE001
+            log.exception("Gagal memperbarui status")
+        if failed and attempt < self.VIEW_SYNC_ATTEMPTS:
+            try:
+                self.after(400 * attempt, lambda: self._sync_views(len(self.segments), attempt + 1))
+            except Exception:  # noqa: BLE001
+                log.exception("Gagal menjadwalkan sinkronisasi ulang tampilan")
+                try:                                              # v1.9.20.1: jangan hanya log, pengguna harus tahu
+                    self.set_status(f"⚠ Retry otomatis gagal dijadwalkan; tampilan belum sinkron ({', '.join(failed)}); "
+                                    "data aman dan akan tersimpan otomatis")
+                except Exception:  # noqa: BLE001
+                    log.exception("Gagal memperbarui status setelah retry gagal dijadwalkan")
+        return not failed
+
+    def _resync_after_editor_rollback(self, segments: list[SubtitleSegment]) -> bool:
+        """
+        Jalur darurat yang dipanggil editor bila on_changed gagal berulang kali SETELAH rollback. Memulihkan hanya yang
+        kritis bagi keandalan data: kepemilikan data, status belum-tersimpan (konservatif: isi sama aman disimpan ulang),
+        dan autosave; bila autosave tak bisa dijadwalkan, simpan langsung. True bila bagian kritis itu pulih.
+        """
+        try:
+            self.segments = segments
+            self._dirty = True
+            self._schedule_autosave()
+            ok = True
+        except Exception:  # noqa: BLE001
+            log.exception("Jadwal autosave gagal pada pemulihan darurat; menyimpan langsung")
+            try:
+                ok = bool(self.flush())
+            except Exception:  # noqa: BLE001
+                log.exception("Simpan langsung pada pemulihan darurat gagal")
+                ok = False
+        self._sync_views(len(segments))
+        return ok
 
     # ---------- Indikator simpan, backup, panel ----------
     def _update_save_indicator(self) -> None:
