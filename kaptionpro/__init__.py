@@ -96,6 +96,120 @@ Perubahan v1.8 (audit keamanan data v1.7)
  * File partial FFmpeg bernama unik per proses (pid + UUID): export bersamaan ke tujuan yang sama
    tidak saling menghapus; export kedua ditolak dengan pesan jelas; partial basi milik proses mati dibersihkan.
 
+(Perubahan v1.9.20.1 - tutup celah validasi (keandalan data), tindak lanjut review v1.9.20:
+ * P1 OverflowError: float(10**400) dan math.isfinite(10**400) melempar OverflowError, BUKAN ValueError, sehingga blok
+   `except (TypeError, ValueError)` tidak menangkapnya. Ditutup di core/word_integrity.py, models.py (sanitize_word_list
+   termasuk batas baris, normalize, retime_words, find_issues), core/utils.py (_clamp_num) dan core/storage.py (_parse_items:
+   baris dengan waktu raksasa dibuang dan dihitung, tidak lagi membuat pemuatan project crash).
+ * P1 Word.from_dict() defensif: data rusak (bukan dict, kunci hilang, bukan angka, NaN/inf, int raksasa) -> None, tidak pernah
+   melempar. SubtitleSegment.from_dict: satu kata rusak = seluruh words baris itu dikosongkan (karaoke dihitung ulang dari
+   teks, aturan yang sama dengan normalize) dan baris tetap selamat; `words` yang bukan list dianggap kosong.
+ * P2 Workspace._sync_views: bila self.after() gagal menjadwalkan retry, status UI berubah menjadi "Retry otomatis gagal
+   dijadwalkan" (bukan hanya log).)
+
+(Perubahan v1.9.20 - Editor Transaction Consistency & Hardening (keandalan data; tanpa fitur UI baru), tindak lanjut review
+ v1.9.19:
+ * P1 Atomicity: Add, Delete, Split, Merge dan edit baris (Apply) kini memakai _transaction() seperti replace_all: data
+   disiapkan dulu, lalu push Undo + mutasi + segel word + gambar ulang + on_changed dalam satu transaksi; gagal di tahap mana
+   pun mengembalikan isi, Undo dan Redo (tanpa entri Undo hantu). Navigasi/fokus sesudah commit (populate, on_select) bukan
+   bagian transaksi.
+ * P1 Pemulihan setelah rollback: sinkronisasi (form, tabel, on_changed) dicoba ulang sampai 3x; bila on_changed tetap gagal,
+   jalur darurat workspace memulihkan bagian kritis (kepemilikan data, status belum-tersimpan, autosave; bila tak bisa
+   dijadwalkan, simpan langsung); bila itu pun gagal, pengguna diberi tahu (bukan hanya log) dan editor.sync_degraded
+   menyala sampai sinkronisasi berhasil lagi. Workspace._on_segments_changed kini mengurus langkah KRITIS dulu (dirty +
+   autosave), lalu tampilan (indikator, timeline, posisi, VLC, status) satu per satu terisolasi dengan percobaan ulang:
+   kegagalan tampilan tak lagi membuat data kotor tanpa autosave. Status simpan dibuat konservatif (setelah rollback = belum
+   tersimpan; menyimpan ulang isi yang sama aman).
+ * P2 Word timestamp: modul baru core/word_integrity (find_word_violations / enforce_word_integrity). Setelah timing berubah
+   (Auto-Fix, Quality Fix, Apply, Split, Merge, edit massal, cari-ganti, import) tidak boleh ada kata di luar rentang
+   barisnya: dijepit bila meleset <= 0,75 dtk, selain itu timestamp kata dibuang (aturan sama dengan saat memuat project);
+   sisa pelanggaran membatalkan operasi (rollback). Celah nyata yang ditutup: jalur in-place (Apply/Split/Merge) tidak
+   melewati normalize, dan Merge baris yang saling menimpa menghasilkan kata yang saling menimpa.)
+
+(Perubahan v1.9.19 - Reliability Hardening (keandalan data; tanpa fitur baru), tindak lanjut review v1.9.18:
+ * P1 Atomicity: replace_all, Undo, Redo, edit massal, dan cari-ganti kini TRANSAKSI semua-atau-tidak-sama-sekali. Dulu snapshot
+   Undo didorong SEBELUM normalisasi/penggantian: bila gagal di tengah, tersisa entri Undo hantu (Undo tampak tak berbuat apa-apa)
+   dan Redo terhapus; bila gagal sesudah data diganti, subtitle berubah tetapi alur melapor "tidak diubah". Sekarang tahap siap
+   (normalize) berjalan lebih dulu, lalu isi + riwayat Undo/Redo dikembalikan persis bila tahap mana pun gagal (juga bila
+   _clear_form/_refresh/on_changed melempar); tampilan dan autosave diberi tahu isi aslinya.
+ * Hasil Quality Fix diverifikasi terhadap rencana yang dikonfirmasi (ApplyVerificationError + rollback bila beda).
+ * Pesan "gagal diterapkan" di dialog kini JUJUR: kondisi subtitle dibandingkan dengan rencana (sama persis -> "TIDAK berubah";
+   beda -> peringatan + arahan Undo), tidak lagi diasumsikan.
+ * P1 Identitas Undo: setiap langkah riwayat punya penanda (before-quality-fix, bulk-upper, add-line, ...) dan nomor operasi unik
+   yang ikut berpindah antara Undo dan Redo. Tombol "Undo perubahan" di dialog memakai undo terarah (editor.undo_operation):
+   hanya membatalkan Quality Fix itu; bila ada operasi lain sesudahnya atau yang di puncak Quality Fix lama, ditolak dengan
+   penjelasan dan TIDAK ada yang berubah (UndoMismatchError). Ctrl+Z biasa tidak berubah.
+ * P2 Batas 5.000 baris: pemotongan daftar laporan (semua filter, dulu hanya filter "Semua") dan PRATINJAU (dulu diam-diam)
+   kini diberitahukan dengan angka ("5.000 dari 7.321"); pratinjau dan dialog konfirmasi menyebut bahwa Terapkan
+   menerapkan SEMUA.)
+
+(Perubahan v1.9.18.1 - perbaikan TES saja (kode aplikasi tidak berubah): test_08 (antrean UI) gagal di runner Windows dengan
+ "hanya 257/300 callback terproses". Penyebab yang masuk akal: pekerjaan tiruan memakai time.sleep(0.002), padahal di Windows
+ sleep bisa ~15,6 ms, jadi beban uji jauh lebih berat dari niatnya. Kini pekerjaan tiruan busy-wait 2 ms dan kegagalan dinilai
+ dari KEMACETAN (tanpa kemajuan 10 dtk; batas atas 90 dtk), bukan jam dinding. Semua 300 callback tetap wajib terproses.)
+
+(Perubahan v1.9.18 - Celah P0 QualityRules + UI Laporan Kualitas dengan Auto-Fix yang aman:
+ * P0: QualityRules(max_cps=10**10000) melempar OverflowError (math.isfinite pada int raksasa), bukan ValueError. Kini SEMUA
+   aturan angka lewat _as_seconds (bilangan nyata terhingga yang muat di float): int/Fraction raksasa, NaN, inf, bool, dan
+   teks ditolak dengan ValueError. max_chars_per_line dan max_lines dibatasi 1..10000 (MAX_RULE_INT). Pesan galat memakai
+   _safe_repr: di Python 3.11+ repr() int > 4300 digit melempar ValueError tersendiri, dan di 3.10 hasilnya sangat panjang.
+ * Laporan Kualitas (ui/quality_dialog.py, baru): menu Alat > "📋 Laporan kualitas…" membuka daftar error/peringatan per baris
+   subtitle (nomor, waktu, tingkat, masalah, teks), filter Semua/Hanya error/Hanya peringatan, saklar "Aturan ketat"
+   (durasi 0,83-7 dtk, jeda >= 0,083 dtk), dan klik ganda/Enter melompat ke baris itu di editor. Tombol "✔ Auto-Fix" lama di
+   toolbar TIDAK diubah.
+ * Perbaiki otomatis dengan alur Analyze -> Preview Changes -> Confirm -> Apply -> Undo. Urutannya dijaga kode yang diuji
+   (core/quality_flow.QualityFlow), bukan urutan tombol: pratinjau tidak mengubah apa pun; Apply hanya setelah konfirmasi
+   Ya/Tidak dan hanya sekali per konfirmasi; rencana basi (subtitle berubah sejak pratinjau) ditolak; backup
+   "before-quality-fix" dibuat sebelum diterapkan; penerapan = SATU langkah Undo editor; Undo diverifikasi (subtitle harus
+   kembali persis). Dialog tidak pernah mengubah subtitle sendiri; penerapan/pembatalan disuntikkan editor.
+ * Perencana (core/quality_fix.py, baru, pure Python): sejajar baris (tidak menghapus/memecah/menggabung). Memperbaiki: baris
+   panjang/terlalu banyak baris (bungkus ulang seimbang; hanya spasi/pemisah baris berubah), overlap dan jeda pendek
+   (pendekkan akhir baris sebelumnya, atau geser awal baris berikutnya bila tak muat; tidak pernah di bawah batas aman 0,3 dtk
+   atau min_duration), CPS tinggi dan durasi singkat (perpanjang akhir ke ruang kosong, hanya bila kebutuhan terpenuhi PENUH).
+   Tidak diperbaiki otomatis tapi dilaporkan dengan alasan: waktu tidak valid, durasi terlalu panjang, teks bertag, kata lebih
+   panjang dari satu baris, dialog bergaris-awal yang tak muat. Hasil rencana diverifikasi dengan pemeriksa yang sama:
+   masalah selesai, masalah BARU akibat perbaikan (mis. CPS naik karena akhir dipendekkan demi menghilangkan overlap; ditandai
+   di pratinjau dan di dialog konfirmasi), dan sisa masalah. Word timestamp hanya dibuang pada baris yang WAKTUNYA berubah.
+ * Tes baru: tests/test_quality_fix_v1918.py (66: P0, bungkus teks, perencana, fuzz, alur), tests/test_quality_dialog_v1918.py
+   (10: kode ASLI dialog dan editor dijalankan dengan GUI palsu: alur penuh, filter, lompat baris, ditolak/basi/gagal, Undo asli
+   editor), test_gui_smoke.py::test_16 (alur penuh di aplikasi nyata; prasyarat assertion, bukan skip). Catatan: widget Tk
+   nyata (tata letak dialog) baru terverifikasi oleh test_16 di CI.)
+
+(Perubahan v1.9.17 - Menutup 3 celah review v1.9.16 (tanpa fitur UI baru):
+ * P0 test_15 false pass: tes pengukur panel Whisper memakai skipTest bila jendela/panel tidak sesuai, jadi panel yang
+   kekecilan tetap tampak "lolos". Kini prasyaratnya assertion (landscape, tinggi jendela >= batas autohide, panel
+   tampil) dan tinggi panel dibandingkan dengan kebutuhan lewat assertGreaterEqual: tes yang tak bisa mengukur GAGAL.
+   Hal yang sama dibereskan di test_14 (skipTest bila tidak landscape). Penjaga baru di core-tests
+   (NoSilentSkipInMeasuringGuiTests, memeriksa sumber lewat AST) membuat test_11/14/15 tidak bisa diam-diam kembali
+   memakai skip. Konsekuensi: bila runner CI gagal memberi jendela >= 740 px, tesnya merah (bukan lolos kosong).
+ * P1 _valid_timing: waktu kini harus bilangan nyata terhingga (int/float/Fraction). Bool (True == 1 di Python),
+   teks ("0"), tipe lain (Decimal, list), NaN/inf, dan int raksasa yang tak muat di float (dulu OverflowError tak
+   tertangkap) dilaporkan sebagai INVALID_TIMING, tidak melempar. math.isfinite sebelumnya sudah dipakai pada nilai hasil
+   float(); yang baru adalah penolakan bool/teks dan OverflowError. cps() ikut menolak durasi bool.
+   Perubahan perilaku disengaja: v1.9.16 masih menerima teks numerik ("0", "2"); v1.9.17 menolaknya.
+ * P1 QualityRules: min_duration, max_duration, min_gap (default None = mati, perilaku v1.9.16 tidak berubah). Kode baru:
+   duration_too_short, duration_too_long, gap_too_small (semuanya peringatan). Durasi dibandingkan dengan toleransi 1 mikrodetik
+   (2.83 - 2.0 = 0.8300000000000001 tidak memicu min_duration 0.83); jeda diukur dari segmen yang berakhir paling akhir
+   dan memakai overlap_tolerance; overlap tetap error dan tidak dilaporkan ganda sebagai jeda. Validasi aturan menolak
+   nilai <= 0, bool, teks, NaN/inf, dan max_duration < min_duration.
+ * Tes baru: tests/test_subtitle_quality_v1917.py (56). Satu tes v1.9.16 diubah mengikuti perilaku baru (teks ditolak).)
+
+(Perubahan v1.9.16 - Panel preset lebih rapi + fondasi Subtitle Quality Checker (tanpa UI):
+ * Panel Language Presets dirapikan: tombol preset 34 -> 28 px, jarak antar-tombol dan judul seksi dikecilkan, label/menu
+   Whisper dan Penerjemah dipadatkan. Menu Whisper model sebelumnya berakhir di ~233 px, padahal panel hanya 183-250 px
+   (terpotong di bawah, laporan review ChatGPT v1.9.15.3); kini berakhir di 169 px. Semua ukuran ada di core/layout.py
+   (SIDE_*, side_whisper_bottom) dan dipakai langsung oleh SidePanel; tes menjaga menu Whisper muat di panel terpendek
+   yang masih ditampilkan (tepat di batas autohide), dan akan gagal bila preset ditambah tanpa menyesuaikan jarak.
+   Warna, font, tombol Generate, pengaturan style, Video Preview, dan Export tidak diubah.
+ * core/subtitle_quality.py (BARU, pure Python, belum terhubung ke UI): check_subtitles(segments, QualityRules) ->
+   QualityReport. Memeriksa CPS (peringatan > 17, error > 25), panjang baris (> 42 karakter), jumlah baris (> 2),
+   overlap (dibandingkan dengan segmen yang berakhir paling akhir, bukan hanya tetangga; toleransi 1 ms), dan waktu
+   tidak valid (NaN/None/akhir <= awal; dilaporkan, tidak melempar). Tag <i> dan {\an8} tidak dihitung; data tidak diubah.
+   O(n log n): 1000 baris, video 2 jam (~2400 baris), dan kasus terburuk 5000 baris saling tumpang tindih ada di tes
+   performa (batas longgar untuk runner CI). Perbaikan otomatis tetap tugas Auto-Fix.
+ * Tes baru: tests/test_subtitle_quality_v1916.py (59), tests/test_side_panel_v1916.py (13), test_gui_smoke.py::test_15
+   (mengukur tepi bawah menu Whisper vs tepi bawah panel di aplikasi nyata dan mencetak angkanya).)
+
 (Perubahan v1.9.15.3 - Panel preset disembunyikan otomatis di jendela pendek (test_11 di 1024x680):
  * Gejala (log CI v1.9.15.2, Linux): diminta=(1024, 680), panel preset diminta=120 nyata=210, editor=306, tabel=62 px.
    Angka 210 adalah tinggi side_box (wadah tetap) itu sendiri, bukan isi CTkScrollableFrame, jadi dugaan v1.9.15.2
@@ -245,4 +359,4 @@ Perubahan v1.8 (audit keamanan data v1.7)
 output, backup berversi, lock atomik, VLC volume/frame-step, editor cari/filter/undo-redo/bulk.)
 """
 
-__version__ = "1.9.15.3"
+__version__ = "1.9.20.1"

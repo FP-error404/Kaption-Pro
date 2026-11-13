@@ -86,6 +86,14 @@ class SubtitleStyle:
             return cls()
 
 
+def _is_finite(value: object) -> bool:
+    """math.isfinite yang tidak melempar: bukan angka / int raksasa yang tak muat di float (OverflowError) = False."""
+    try:
+        return math.isfinite(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 @dataclass
 class Word:
     start: float
@@ -93,8 +101,19 @@ class Word:
     text: str
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Word":
-        return cls(float(d["start"]), float(d["end"]), str(d["text"]))
+    def from_dict(cls, d: object) -> "Word | None":
+        """
+        Word dari dict hasil JSON. Defensif (v1.9.20.1): data rusak -> None, TIDAK pernah melempar. Rusak = bukan dict, kunci
+        hilang, waktu bukan angka, NaN/inf, atau int raksasa yang tak muat di float (OverflowError, bukan ValueError).
+        """
+        try:
+            start, end = float(d["start"]), float(d["end"])  # type: ignore[index]
+            text = str(d["text"])  # type: ignore[index]
+        except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
+            return None
+        if not (math.isfinite(start) and math.isfinite(end)):
+            return None
+        return cls(start, end, text)
 
 
 @dataclass
@@ -109,8 +128,18 @@ class SubtitleSegment:
 
     @classmethod
     def from_dict(cls, d: dict) -> "SubtitleSegment":
-        return cls(float(d["start"]), float(d["end"]), str(d.get("text", "")),
-                   [Word.from_dict(w) for w in d.get("words", [])])
+        """
+        Waktu/teks BARIS yang rusak melempar (KeyError/TypeError/ValueError/OverflowError; pemuat project membuang baris itu
+        dan menghitungnya). Timestamp KATA yang rusak tidak membuang baris: satu kata rusak = seluruh words baris itu
+        dikosongkan (karaoke dihitung ulang dari teks), aturan yang sama dengan SubtitleIO.normalize. `words` yang bukan
+        list juga dianggap kosong.
+        """
+        raw_words = d.get("words", [])
+        words: list[Word] = []
+        if isinstance(raw_words, list):
+            parsed = [Word.from_dict(w) for w in raw_words]
+            words = [w for w in parsed if w is not None] if all(w is not None for w in parsed) else []
+        return cls(float(d["start"]), float(d["end"]), str(d.get("text", "")), words)
 
     @property
     def duration(self) -> float:
@@ -197,11 +226,17 @@ def sanitize_word_list(words: list["Word"], seg_start: float, seg_end: float, to
       - durasi nol/negatif diperbaiki ke min_dur (bila tidak muat dalam segmen = tidak valid)
       - tumpang tindih kecil antar kata dipotong; tumpang tindih besar = tidak valid
     """
+    try:
+        seg_start, seg_end = float(seg_start), float(seg_end)       # int raksasa -> OverflowError di aritmetika di bawah
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not (math.isfinite(seg_start) and math.isfinite(seg_end)):
+        return None
     out: list[Word] = []
     for w in words:
         try:
             s, e = float(w.start), float(w.end)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError, AttributeError):
             return None
         if not (math.isfinite(s) and math.isfinite(e)) or not str(w.text).strip():
             return None
@@ -239,7 +274,7 @@ def retime_words(text: str, src_words: list["Word"], old_start: float, old_end: 
     """
     tokens = text.split()
     src = [w for w in src_words if w.text.strip() and w.end > w.start
-           and math.isfinite(w.start) and math.isfinite(w.end)]
+           and _is_finite(w.start) and _is_finite(w.end)]
     if not tokens or not src:
         return []
     cum = [0.0]
@@ -417,7 +452,7 @@ class SubtitleIO:
             if not seg.text.strip():
                 issues[i] = "empty"
                 continue
-            if not (math.isfinite(seg.start) and math.isfinite(seg.end)) or seg.end <= seg.start:
+            if not (_is_finite(seg.start) and _is_finite(seg.end)) or seg.end <= seg.start:
                 issues[i] = "bad"
                 continue
             if seg.duration < 0.30:
@@ -441,7 +476,7 @@ class SubtitleIO:
         rep = LoadReport()
         kept: list[SubtitleSegment] = []
         for s in segments:
-            if not isinstance(s.text, str) or not (math.isfinite(s.start) and math.isfinite(s.end)):
+            if not isinstance(s.text, str) or not (_is_finite(s.start) and _is_finite(s.end)):
                 rep.dropped += 1
                 continue
             if s.start < 0 or s.end < 0:
